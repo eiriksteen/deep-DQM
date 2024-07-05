@@ -1,2 +1,5 @@
 data
 *results*
+.DS_Store
+__pycache__
+*egg*
