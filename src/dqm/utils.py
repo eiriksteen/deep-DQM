@@ -74,8 +74,6 @@ def plot_metrics_per_step(total_scores, total_preds, total_labels, out_dir):
 
             if not np.all(is_anomaly == first_label):
 
-                print("GOOO")
-
                 accuracy = accuracy_score(is_anomaly, preds)
                 balanced_accuracy = balanced_accuracy_score(is_anomaly, preds)
                 precision = precision_score(is_anomaly, preds)

@@ -19,7 +19,7 @@ from dqm.deep_models import (
     CNN1D,
     RefFilter
 )
-from dqm.shallow_models import LinearRegressor
+from dqm.shallow_models import LinearRegressor, CopyModel
 from dqm.torch_datasets import LHCb2018SequentialDataset
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import compute_results_summary, plot_metrics_per_step
@@ -39,7 +39,8 @@ def train(
         batch_size=1):
 
     model = model.to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    if not isinstance(model, CopyModel):
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
 
     loader = DataLoader(data, batch_size=batch_size, shuffle=False)
@@ -63,13 +64,16 @@ def train(
         total_probs += F.softmax(logits,
                                  dim=-1)[:, -1].detach().cpu().tolist()
 
-        # Train model parameters on current batch
-        for _ in range(steps_per_batch):
-            logits = model(histogram)
-            loss = loss_fn(logits, is_anomaly)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        if isinstance(model, CopyModel):
+            model.update(is_anomaly)
+        else:
+            # Train model parameters on current batch
+            for _ in range(steps_per_batch):
+                logits = model(histogram)
+                loss = loss_fn(logits, is_anomaly)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
     return total_probs, total_preds, total_labels
 
@@ -88,7 +92,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="mlp")
     args = parser.parse_args()
 
-    models = ["mlp", "resnet1d", "linear", "cnn1d", "ref_filter"]
+    models = ["mlp", "resnet1d", "linear", "cnn1d", "ref_filter", "copy"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
@@ -129,6 +133,8 @@ if __name__ == "__main__":
             model = CNN1D(1, 1, data.num_classes)
         elif args.model == "ref_filter":
             model = RefFilter(data.num_features, 512)
+        elif args.model == "copy":
+            model = CopyModel(data.num_classes)
         else:
             raise ValueError(f"Model {model} not supported")
 
