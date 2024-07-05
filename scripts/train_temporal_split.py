@@ -15,8 +15,8 @@ from sklearn.metrics import (
     roc_auc_score,
     average_precision_score
 )
-from dqm.models import MLP, ResNet1D
-from dqm.torch_datasets import LHCbTempSplitDataset
+from dqm.deep_models import MLP, ResNet1D
+from dqm.torch_datasets import LHCb2018TempSplitDataset
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import compute_results_summary
 
@@ -48,8 +48,6 @@ def train(
 
             histogram = sample["histogram"].to(DEVICE)
             is_anomaly = sample["is_anomaly"].to(DEVICE)
-            histogram = histogram.unsqueeze(1) if isinstance(
-                model, ResNet1D) else histogram
 
             optimizer.zero_grad()
             logits = model(histogram)
@@ -65,8 +63,6 @@ def train(
 
             histogram = sample["histogram"].to(DEVICE)
             is_anomaly = sample["is_anomaly"].to(DEVICE)
-            histogram = histogram.unsqueeze(1) if isinstance(
-                model, ResNet1D) else histogram
 
             logits = model(histogram)
             loss = loss_fn(logits, is_anomaly)
@@ -105,8 +101,6 @@ def train(
 
         histogram = sample["histogram"].to(DEVICE)
         is_anomaly = sample["is_anomaly"].to(DEVICE)
-        histogram = histogram.unsqueeze(1) if isinstance(
-            model, ResNet1D) else histogram
 
         logits = model(histogram)
         loss = loss_fn(logits, is_anomaly)
@@ -153,17 +147,17 @@ if __name__ == "__main__":
     with open(out_dir / "config.json", "w") as f:
         json.dump(vars(args), f)
 
-    train_data = LHCbTempSplitDataset(
+    train_data = LHCb2018TempSplitDataset(
         DATA_DIR / "formatted_dataset_2018.csv",
         "train",
         train_frac=args.train_frac,
         upsample_positive=True)
-    val_data = LHCbTempSplitDataset(
+    val_data = LHCb2018TempSplitDataset(
         DATA_DIR / "formatted_dataset_2018.csv",
         "val",
         train_frac=args.train_frac,
     )
-    test_data = LHCbTempSplitDataset(
+    test_data = LHCb2018TempSplitDataset(
         DATA_DIR / "formatted_dataset_2018.csv",
         "test",
         train_frac=args.train_frac,

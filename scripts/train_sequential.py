@@ -1,6 +1,5 @@
 import argparse
 import json
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,26 +7,22 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 from torch.utils.data import DataLoader
-from pprint import pprint
 from tqdm import tqdm
 from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
     roc_auc_score,
-    average_precision_score
+    average_precision_score,
+    balanced_accuracy_score
 )
-from dqm.models import (
+from dqm.deep_models import (
     MLP,
     ResNet1D,
-    LinearRegressor,
-    CNN,
+    CNN1D,
     RefFilter
 )
-from dqm.torch_datasets import LHCbSequentialDataset
+from dqm.shallow_models import LinearRegressor
+from dqm.torch_datasets import LHCb2018SequentialDataset
 from dqm.settings import DATA_DIR, DEVICE
-from dqm.utils import compute_results_summary
+from dqm.utils import compute_results_summary, plot_metrics_per_step
 
 
 sns.set_style("white")
@@ -48,16 +43,13 @@ def train(
     loss_fn = nn.CrossEntropyLoss()
 
     loader = DataLoader(data, batch_size=batch_size, shuffle=False)
-    total_labels, total_preds, total_probs = [], [], []
-    auroc_per_step, auprc_per_step = [], []
+    total_probs, total_preds, total_labels = [], [], []
     loss_total = 0
 
     for sample in tqdm(loader):
 
         histogram = sample["histogram"].to(DEVICE)
         is_anomaly = sample["is_anomaly"].to(DEVICE)
-        histogram = histogram.unsqueeze(1) if isinstance(
-            model, ResNet1D) or isinstance(model, CNN) else histogram
 
         # Run the model on the current batch
         logits = model(histogram)
@@ -71,11 +63,6 @@ def train(
         total_probs += F.softmax(logits,
                                  dim=-1)[:, -1].detach().cpu().tolist()
 
-        if 0 in total_labels and 1 in total_labels:
-            auroc_per_step.append(roc_auc_score(total_labels, total_probs))
-            auprc_per_step.append(
-                average_precision_score(total_labels, total_probs))
-
         # Train model parameters on current batch
         for _ in range(steps_per_batch):
             logits = model(histogram)
@@ -84,37 +71,14 @@ def train(
             loss.backward()
             optimizer.step()
 
-    metrics = {
-        "accuracy": accuracy_score(total_labels, total_preds),
-        "precision": precision_score(total_labels, total_preds),
-        "recall": recall_score(total_labels, total_preds),
-        "f1": f1_score(total_labels, total_preds),
-        "auroc": roc_auc_score(total_labels, total_probs),
-        "auprc": average_precision_score(total_labels, total_probs)
-    }
-
-    return metrics, auroc_per_step, auprc_per_step
-
-
-def plot_stepwise_results(metric_per_step, metric_name, out_dir):
-
-    metric_per_step = np.array(metric_per_step)
-    mu = metric_per_step.mean(axis=0)
-    std = metric_per_step.std(axis=0)
-
-    plt.title(f"{metric_name} per step")
-    plt.plot(mu)
-    plt.fill_between(
-        np.arange(len(mu)),
-        mu - 1.96 * std,
-        mu + 1.96 * std,
-        alpha=0.3
-    )
-    plt.savefig(out_dir / f"{metric_name}.png")
-    plt.close()
+    return total_probs, total_preds, total_labels
 
 
 if __name__ == "__main__":
+
+    # TODO:
+    # - Compute correctly predicted switches (from 0-1 without seeing 1 first and vice versa)
+    # - Add baseline simply copying past prediction
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps_per_batch", type=int, default=1)
@@ -124,7 +88,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="mlp")
     args = parser.parse_args()
 
-    models = ["mlp", "resnet1d", "linear", "cnn", "ref_filter"]
+    models = ["mlp", "resnet1d", "linear", "cnn1d", "ref_filter"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
@@ -135,7 +99,7 @@ if __name__ == "__main__":
     with open(out_dir / "config.json", "w") as f:
         json.dump(vars(args), f)
 
-    data = LHCbSequentialDataset(
+    data = LHCb2018SequentialDataset(
         DATA_DIR / "formatted_dataset_2018.csv",
         center_and_normalize=True,
         to_torch=True
@@ -150,7 +114,7 @@ if __name__ == "__main__":
     print(f"Number of negative samples (train): {data.num_neg}")
     print("*" * 10)
 
-    total_metrics, total_auroc_per_step, total_auprc_per_step = [], [], []
+    total_probs, total_preds, total_labels = [], [], []
     for run in range(args.n_runs):
 
         print(f"RUN {run + 1}/{args.n_runs}")
@@ -161,8 +125,8 @@ if __name__ == "__main__":
             model = ResNet1D(1, 1, data.num_classes)
         elif args.model == "linear":
             model = LinearRegressor(data.num_features, data.num_classes)
-        elif args.model == "cnn":
-            model = CNN(1, 1, data.num_classes)
+        elif args.model == "cnn1d":
+            model = CNN1D(1, 1, data.num_classes)
         elif args.model == "ref_filter":
             model = RefFilter(data.num_features, 512)
         else:
@@ -170,7 +134,7 @@ if __name__ == "__main__":
 
         print(f"MODEL SIZE: {sum(p.numel() for p in model.parameters())}")
 
-        metrics, auroc_per_step, auprc_per_step = train(
+        probs, preds, labels = train(
             model,
             data,
             steps_per_batch=args.steps_per_batch,
@@ -178,20 +142,22 @@ if __name__ == "__main__":
             batch_size=args.batch_size
         )
 
-        total_metrics.append(metrics)
-        total_auroc_per_step.append(auroc_per_step)
-        total_auprc_per_step.append(auprc_per_step)
+        print(f"BALANCED ACCURACY: {balanced_accuracy_score(labels, preds)}")
+        print(f"ROC AUC: {roc_auc_score(labels, probs)}")
+        print(f"AP: {average_precision_score(labels, probs)}")
 
-        pprint(metrics)
+        total_probs.append(probs)
+        total_preds.append(preds)
+        total_labels.append(labels)
 
     print("*" * 10)
     print("FINAL RESULTS")
-    results_summary = compute_results_summary(total_metrics)
+    results_summary = compute_results_summary(
+        total_probs, total_preds, total_labels)
     print(results_summary)
     print("*" * 10)
 
-    with open(out_dir / "results_summary.txt", "w") as f:
+    with open(out_dir / "results.txt", "w") as f:
         f.write(results_summary)
 
-    plot_stepwise_results(total_auroc_per_step, "auroc", out_dir)
-    plot_stepwise_results(total_auprc_per_step, "auprc", out_dir)
+    plot_metrics_per_step(total_probs, total_preds, total_labels, out_dir)

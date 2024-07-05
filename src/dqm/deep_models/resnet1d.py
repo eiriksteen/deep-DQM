@@ -49,7 +49,7 @@ class ResNet1D(nn.Module):
 
     def forward(self, x):
 
-        logits = self.fcn(x)
+        logits = self.fcn(x.unsqueeze(1))
         out = self.mlp(logits)
 
         return out

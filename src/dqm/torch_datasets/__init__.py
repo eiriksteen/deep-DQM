@@ -1,1 +1,1 @@
-from .LHCb import LHCbSequentialDataset, LHCbTempSplitDataset
+from .LHCb import LHCb2018SequentialDataset, LHCb2018TempSplitDataset

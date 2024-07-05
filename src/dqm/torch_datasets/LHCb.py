@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 
-class LHCbSequentialDataset(Dataset):
+class LHCb2018SequentialDataset(Dataset):
 
     def __init__(
             self,
@@ -53,7 +53,7 @@ class LHCbSequentialDataset(Dataset):
         return sample
 
 
-class LHCbTempSplitDataset(Dataset):
+class LHCb2018TempSplitDataset(Dataset):
 
     def __init__(
         self,

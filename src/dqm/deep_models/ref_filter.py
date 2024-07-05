@@ -23,7 +23,6 @@ class RefFilter(nn.Module):
     def forward(self, x):
 
         p = self.proj(x)
-
         sim1 = F.cosine_similarity(p, self.nominal_embedding.weight)
         sim2 = F.cosine_similarity(p, self.anomaly_embedding.weight)
         sim = torch.stack([sim1, sim2], dim=-1)

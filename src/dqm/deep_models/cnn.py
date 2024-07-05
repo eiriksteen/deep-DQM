@@ -1,7 +1,7 @@
 import torch.nn as nn
 
 
-class CNN(nn.Module):
+class CNN1D(nn.Module):
 
     def __init__(
             self,
@@ -30,7 +30,7 @@ class CNN(nn.Module):
 
     def forward(self, x):
 
-        logits = self.fcn(x)
+        logits = self.fcn(x.unsqueeze(1))
         out = self.head(logits)
 
         return out
