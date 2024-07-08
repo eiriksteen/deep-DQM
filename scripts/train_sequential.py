@@ -32,6 +32,8 @@ sns.set_style("white")
 plt.rc("figure", figsize=(20, 10))
 plt.rc("font", size=13)
 
+torch.manual_seed(0)
+
 
 def train(model, data, args):
 

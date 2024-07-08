@@ -7,12 +7,12 @@ class MLP(nn.Module):
         super().__init__()
 
         self.network = nn.Sequential(
-            nn.Linear(in_dim, 1024),
+            nn.Linear(in_dim, 128),
             nn.ReLU(),
-            nn.Linear(1024, 512),
+            nn.Linear(128, 64),
             nn.Dropout(0.2),
             nn.ReLU(),
-            nn.Linear(512, num_classes),
+            nn.Linear(64, num_classes),
         )
 
     def forward(self, x):
