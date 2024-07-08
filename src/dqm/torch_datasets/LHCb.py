@@ -12,11 +12,11 @@ class LHCb2018SequentialDataset(Dataset):
             self,
             data_path: Path,
             center_and_normalize: bool = True,
+            running_center_and_normalize: bool = True,
             to_torch: bool = True):
 
         super().__init__()
 
-        self.center_and_normalize = center_and_normalize
         self.to_torch = to_torch
 
         self.df = pd.read_csv(data_path)
@@ -29,6 +29,12 @@ class LHCb2018SequentialDataset(Dataset):
         self.num_pos = len(self.labels[self.labels == 1])
         self.num_neg = len(self.labels[self.labels == 0])
 
+        if center_and_normalize:
+            self.whiten()
+
+        if running_center_and_normalize:
+            self.whiten_running()
+
     def __len__(self):
         return self.size
 
@@ -36,9 +42,6 @@ class LHCb2018SequentialDataset(Dataset):
 
         histogram = self.data[idx]
         is_anomaly = self.labels[idx]
-
-        if self.center_and_normalize:
-            histogram = (histogram - histogram.mean()) / histogram.std()
 
         if self.to_torch:
             histogram = torch.tensor(histogram).float()
@@ -51,6 +54,28 @@ class LHCb2018SequentialDataset(Dataset):
         }
 
         return sample
+
+    def whiten(self):
+
+        mu = self.data.mean(axis=1, keepdims=True)
+        std = self.data.std(axis=1, keepdims=True)
+        std = np.where(std < 1e-06, 1e-06, std)
+        self.data = (self.data - mu) / std
+
+    def whiten_running(self):
+
+        data_cusum = np.cumsum(self.data, axis=0)
+        running_mean = data_cusum / np.arange(1, self.size + 1)[:, None]
+
+        running_std = np.zeros_like(self.data)
+        for t in range(1, self.size):
+            running_std[t] = np.sqrt(
+                (t * running_std[t-1]**2 + (self.data[t] - running_mean[t])**2) / (t+1))
+
+        running_std = np.where(running_std < 1e-06, 1e-06, running_std)
+        self.data = (self.data - running_mean) / running_std
+
+        # TODO: Implement EMA normalization
 
     def get_pos_neg_idx(self):
 

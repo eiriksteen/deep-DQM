@@ -33,16 +33,14 @@ plt.rc("figure", figsize=(20, 10))
 plt.rc("font", size=13)
 
 
-def train(
-    model,
-    data,
-    args
-):
+def train(model, data, args):
 
     requires_grad = not isinstance(model, CopyModel)
     model = model.to(DEVICE)
+
     if requires_grad:
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+
     loss_fn = nn.CrossEntropyLoss()
     loader = DataLoader(data, batch_size=args.batch_size, shuffle=False)
 
@@ -54,34 +52,12 @@ def train(
     total_probs, total_preds, total_labels = [], [], []
     loss_total = 0
 
-    alpha = 0.5
-    mu = torch.zeros(data.num_features).to(DEVICE)
-    sigma = torch.ones(data.num_features).to(DEVICE)
-
     for batch_num, sample in enumerate(tqdm(loader)):
 
         model.eval()
 
         histogram = sample["histogram"].to(DEVICE)
         is_anomaly = sample["is_anomaly"].to(DEVICE)
-
-        if batch_num > 0:
-            mu = (1 - alpha) * mu + alpha * histogram.mean(dim=0)
-            sigma = (1 - alpha) * sigma + alpha * histogram.std(dim=0)
-        else:
-            mu = histogram.mean(dim=0)
-            sigma = histogram.std(dim=0)
-            sigma = torch.where(sigma < 1e-06, 1e-06, sigma)
-
-        # print("@")
-        # print(histogram.mean(dim=0))
-        # print(histogram.std(dim=0))
-
-        histogram = (histogram - mu) / sigma
-
-        # print("_")
-        # print(histogram.mean(dim=0))
-        # print(histogram.std(dim=0))
 
         # Run the model on the current batch
         logits = model(histogram)[:len(is_anomaly)]
@@ -100,15 +76,13 @@ def train(
 
         if requires_grad:
 
-            # Train model parameters on current batch
+            # Train model on current batch
             model.train()
             for _ in range(args.steps_per_batch):
 
                 # Resample from replay buffer each step (simulate epochs)
                 histogram_resampled, is_anomaly_resampled = replay_buffer(
                     histogram, is_anomaly)
-
-                histogram_resampled = (histogram_resampled - mu) / sigma
 
                 logits = model(histogram_resampled)
                 loss = loss_fn(logits, is_anomaly_resampled)
@@ -126,19 +100,16 @@ def train(
 
 if __name__ == "__main__":
 
-    # TODO:
-    # - Incorporate replay buffer (maybe include timestep embedding)
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps_per_batch", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--n_runs", type=int, default=3)
+    parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--replay_pos_ratio", type=float, default=1.0)
     # replay ratio as a fraction of the batch size
     # (0.5 means there are 0.5 * batch_size replayed samples,
     # while there are batch_size new samples)
-    parser.add_argument("--replay_ratio", type=float, default=1.0)
+    parser.add_argument("--replay_ratio", type=float, default=1.5)
     parser.add_argument("--model", type=str, default="mlp")
     args = parser.parse_args()
 
@@ -155,7 +126,9 @@ if __name__ == "__main__":
 
     data = LHCb2018SequentialDataset(
         DATA_DIR / "formatted_dataset_2018.csv",
+        # Key to normalize both row and column-wise
         center_and_normalize=True,
+        running_center_and_normalize=True,
         to_torch=True
     )
 
