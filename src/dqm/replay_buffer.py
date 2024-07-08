@@ -28,8 +28,8 @@ class ReplayBuffer:
         idx_neg = self.neg_idx[:np.searchsorted(self.neg_idx, self.cur_idx)]
         idx_pos = self.pos_idx[:np.searchsorted(self.pos_idx, self.cur_idx)]
 
-        hist_neg, labels_neg = self.default_hist()
-        hist_pos, labels_pos = self.default_hist()
+        hist_neg, labels_neg = self.empty_sample()
+        hist_pos, labels_pos = self.empty_sample()
 
         if idx_neg and self.neg_buffer_size > 0:
 
@@ -57,7 +57,7 @@ class ReplayBuffer:
 
         return torch.cat([hist_neg, hist_pos], dim=0), torch.cat([labels_neg, labels_pos], dim=0)
 
-    def default_hist(self):
+    def empty_sample(self):
 
         hist = torch.empty(0, self.num_features)
         labels = torch.empty(0, self.num_classes)
