@@ -22,6 +22,7 @@ from dqm.deep_models import (
 )
 from dqm.shallow_models import LinearRegressor, CopyModel
 from dqm.torch_datasets import LHCb2018SequentialDataset
+from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import compute_results_summary, plot_metrics_per_step
 
@@ -33,23 +34,27 @@ plt.rc("font", size=13)
 
 
 def train(
-        model,
-        data,
-        steps_per_batch=1,
-        lr=0.001,
-        batch_size=1):
+    model,
+    data,
+    args
+):
 
     requires_grad = not isinstance(model, CopyModel)
     model = model.to(DEVICE)
     if requires_grad:
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
+    loader = DataLoader(data, batch_size=args.batch_size, shuffle=False)
 
-    loader = DataLoader(data, batch_size=batch_size, shuffle=False)
+    replay_buffer = ReplayBuffer(
+        data,
+        int(args.batch_size * args.replay_ratio),
+        pos_ratio=args.replay_pos_ratio)
+
     total_probs, total_preds, total_labels = [], [], []
     loss_total = 0
 
-    for sample in tqdm(loader):
+    for batch_num, sample in enumerate(tqdm(loader)):
 
         histogram = sample["histogram"].to(DEVICE)
         is_anomaly = sample["is_anomaly"].to(DEVICE)
@@ -57,24 +62,35 @@ def train(
         # Run the model on the current batch
         logits = model(histogram)[:len(is_anomaly)]
         loss = loss_fn(logits, is_anomaly)
-
-        labels = is_anomaly.argmax(dim=-1)
-        preds = logits.argmax(dim=-1)
-        probs = F.softmax(logits, dim=-1)[:, -1]
-
         loss_total += loss.item()
-        total_labels += labels.detach().cpu().tolist()
-        total_preds += preds.detach().cpu().tolist()
-        total_probs += probs.detach().cpu().tolist()
+
+        # Don't evaluate the model before it has seen anything
+        if batch_num > 0:
+            labels = is_anomaly.argmax(dim=-1)
+            preds = logits.argmax(dim=-1)
+            probs = F.softmax(logits, dim=-1)[:, -1]
+
+            total_labels += labels.detach().cpu().tolist()
+            total_preds += preds.detach().cpu().tolist()
+            total_probs += probs.detach().cpu().tolist()
 
         if requires_grad:
+
             # Train model parameters on current batch
-            for _ in range(steps_per_batch):
-                logits = model(histogram)
-                loss = loss_fn(logits, is_anomaly)
+            for _ in range(args.steps_per_batch):
+
+                # Resample from replay buffer each step (simulate epochs)
+                histogram_resampled, is_anomaly_resampled = replay_buffer(
+                    histogram, is_anomaly)
+
+                logits = model(histogram_resampled)
+                loss = loss_fn(logits, is_anomaly_resampled)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
+            replay_buffer.update(args.batch_size)
+
         else:
             model.update(is_anomaly)
 
@@ -90,7 +106,12 @@ if __name__ == "__main__":
     parser.add_argument("--steps_per_batch", type=int, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--n_runs", type=int, default=5)
+    parser.add_argument("--n_runs", type=int, default=3)
+    parser.add_argument("--replay_pos_ratio", type=float, default=0.8)
+    # replay ratio as a fraction of the batch size
+    # (0.5 means there are 0.5 * batch_size replayed samples,
+    # while there are batch_size new samples)
+    parser.add_argument("--replay_ratio", type=float, default=0.5)
     parser.add_argument("--model", type=str, default="mlp")
     args = parser.parse_args()
 
@@ -145,9 +166,7 @@ if __name__ == "__main__":
         probs, preds, labels = train(
             model,
             data,
-            steps_per_batch=args.steps_per_batch,
-            lr=args.lr,
-            batch_size=args.batch_size
+            args
         )
 
         print(f"BALANCED ACCURACY: {balanced_accuracy_score(labels, preds)}")

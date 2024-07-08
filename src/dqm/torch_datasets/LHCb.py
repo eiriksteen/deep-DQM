@@ -52,6 +52,13 @@ class LHCb2018SequentialDataset(Dataset):
 
         return sample
 
+    def get_pos_neg_idx(self):
+
+        pos_idx = np.where(self.labels == 1)[0].tolist()
+        neg_idx = np.where(self.labels == 0)[0].tolist()
+
+        return pos_idx, neg_idx
+
 
 class LHCb2018TempSplitDataset(Dataset):
 
