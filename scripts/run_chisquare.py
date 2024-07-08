@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+import numpy as np
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -38,6 +39,10 @@ if __name__ == "__main__":
         total_scores.append(scores)
         total_preds.append(preds)
         total_labels.append(labels)
+
+    total_scores = np.array(total_scores)
+    total_preds = np.array(total_preds)
+    total_labels = np.array(total_labels)
 
     print("*" * 10)
     print("FINAL RESULTS")

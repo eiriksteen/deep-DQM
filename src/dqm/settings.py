@@ -11,6 +11,7 @@ DEVICE = (
     else "cpu"
 )
 
+
 HISTO_NBINS_DICT = {
     '/Track/TrackITOverlapMonitor/ITASideTrack/IT1BottomBox/hitres': 100,
     '/Track/TrackITOverlapMonitor/ITASideTrack/IT1TopBox/hitres': 100,

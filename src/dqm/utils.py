@@ -1,3 +1,4 @@
+from pathlib import Path
 import numpy as np
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -17,16 +18,41 @@ plt.rc("figure", figsize=(20, 10))
 plt.rc("font", size=13)
 
 
-def compute_results_summary(total_scores, total_preds, total_labels):
+def filter_flips(scores: np.ndarray,
+                 preds: np.ndarray,
+                 labels: np.ndarray):
+
+    flip_idx = np.where(labels[:-1] != labels[1:])[0] + 1
+    flip_scores = scores[flip_idx]
+    flip_preds = preds[flip_idx]
+    flip_labels = labels[flip_idx]
+
+    return flip_scores, flip_preds, flip_labels
+
+
+def compute_results_summary(total_scores: np.ndarray,
+                            total_preds: np.ndarray,
+                            total_labels: np.ndarray,):
 
     metrics = {
-        "accuracy": [],
-        "balanced_accuracy": [],
-        "precision": [],
-        "recall": [],
-        "f1": [],
-        "auroc": [],
-        "auprc": []
+        "total": {
+            "accuracy": [],
+            "balanced_accuracy": [],
+            "precision": [],
+            "recall": [],
+            "f1": [],
+            "auroc": [],
+            "auprc": []
+        },
+        "flips": {
+            "accuracy": [],
+            "balanced_accuracy": [],
+            "precision": [],
+            "recall": [],
+            "f1": [],
+            "auroc": [],
+            "auprc": []
+        }
     }
 
     for run in range(len(total_scores)):
@@ -34,25 +60,51 @@ def compute_results_summary(total_scores, total_preds, total_labels):
         preds = total_preds[run]
         is_anomaly = total_labels[run]
 
-        metrics["accuracy"].append(accuracy_score(is_anomaly, preds))
-        metrics["balanced_accuracy"].append(
+        metrics["total"]["accuracy"].append(accuracy_score(is_anomaly, preds))
+        metrics["total"]["balanced_accuracy"].append(
             balanced_accuracy_score(is_anomaly, preds))
-        metrics["precision"].append(precision_score(is_anomaly, preds))
-        metrics["recall"].append(recall_score(is_anomaly, preds))
-        metrics["f1"].append(f1_score(is_anomaly, preds))
-        metrics["auroc"].append(roc_auc_score(is_anomaly, scores))
-        metrics["auprc"].append(average_precision_score(is_anomaly, scores))
+        metrics["total"]["precision"].append(
+            precision_score(is_anomaly, preds))
+        metrics["total"]["recall"].append(recall_score(is_anomaly, preds))
+        metrics["total"]["f1"].append(f1_score(is_anomaly, preds))
+        metrics["total"]["auroc"].append(roc_auc_score(is_anomaly, scores))
+        metrics["total"]["auprc"].append(
+            average_precision_score(is_anomaly, scores))
+
+        flip_scores, flip_preds, flip_labels = filter_flips(
+            scores, preds, is_anomaly)
+
+        metrics["flips"]["accuracy"].append(
+            accuracy_score(flip_labels, flip_preds))
+        metrics["flips"]["balanced_accuracy"].append(
+            balanced_accuracy_score(flip_labels, flip_preds))
+        metrics["flips"]["precision"].append(
+            precision_score(flip_labels, flip_preds))
+        metrics["flips"]["recall"].append(
+            recall_score(flip_labels, flip_preds))
+        metrics["flips"]["f1"].append(f1_score(flip_labels, flip_preds))
+        metrics["flips"]["auroc"].append(
+            roc_auc_score(flip_labels, flip_scores))
+        metrics["flips"]["auprc"].append(
+            average_precision_score(flip_labels, flip_scores))
 
     res = []
-    for metric_name, metric_values in metrics.items():
-        mean = np.mean(metric_values)
-        std = np.std(metric_values)
-        res.append(f"{metric_name} = {mean:.3f} +- {std:.3f}")
+
+    for total_or_flips, metrics_dict in metrics.items():
+        res += [f"{total_or_flips.upper()}"]
+        for metric_name, metric_values in metrics_dict.items():
+            mean = np.mean(metric_values)
+            std = np.std(metric_values)
+            res.append(f"{' '*5}{metric_name} = {mean:.3f} +- {std:.3f}")
 
     return "\n".join(res)
 
 
-def plot_metrics_per_step(total_scores, total_preds, total_labels, out_dir):
+def plot_metrics_per_step(
+        total_scores: np.ndarray,
+        total_preds: np.ndarray,
+        total_labels: np.ndarray,
+        out_dir: Path):
 
     metrics_per_step = {
         "accuracy": [[] for _ in range(len(total_scores))],
@@ -65,11 +117,10 @@ def plot_metrics_per_step(total_scores, total_preds, total_labels, out_dir):
     }
 
     for run in range(len(total_scores)):
-
         for step in range(len(total_scores[run])):
-            scores = np.array(total_scores[run][:step])
-            preds = np.array(total_preds[run][:step])
-            is_anomaly = np.array(total_labels[run][:step])
+            scores = total_scores[run, :step]
+            preds = total_preds[run, :step]
+            is_anomaly = total_labels[run, :step]
             first_label = is_anomaly[0] if step > 0 else is_anomaly
 
             if not np.all(is_anomaly == first_label):

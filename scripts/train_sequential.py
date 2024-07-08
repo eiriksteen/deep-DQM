@@ -1,5 +1,6 @@
 import argparse
 import json
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -38,8 +39,9 @@ def train(
         lr=0.001,
         batch_size=1):
 
+    requires_grad = not isinstance(model, CopyModel)
     model = model.to(DEVICE)
-    if not isinstance(model, CopyModel):
+    if requires_grad:
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.CrossEntropyLoss()
 
@@ -53,20 +55,19 @@ def train(
         is_anomaly = sample["is_anomaly"].to(DEVICE)
 
         # Run the model on the current batch
-        logits = model(histogram)
+        logits = model(histogram)[:len(is_anomaly)]
         loss = loss_fn(logits, is_anomaly)
 
-        loss_total += loss.item()
-        total_labels += is_anomaly.argmax(
-            dim=-1).detach().cpu().tolist()
-        total_preds += logits.argmax(
-            dim=-1).detach().cpu().tolist()
-        total_probs += F.softmax(logits,
-                                 dim=-1)[:, -1].detach().cpu().tolist()
+        labels = is_anomaly.argmax(dim=-1)
+        preds = logits.argmax(dim=-1)
+        probs = F.softmax(logits, dim=-1)[:, -1]
 
-        if isinstance(model, CopyModel):
-            model.update(is_anomaly)
-        else:
+        loss_total += loss.item()
+        total_labels += labels.detach().cpu().tolist()
+        total_preds += preds.detach().cpu().tolist()
+        total_probs += probs.detach().cpu().tolist()
+
+        if requires_grad:
             # Train model parameters on current batch
             for _ in range(steps_per_batch):
                 logits = model(histogram)
@@ -74,6 +75,8 @@ def train(
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+        else:
+            model.update(is_anomaly)
 
     return total_probs, total_preds, total_labels
 
@@ -81,8 +84,7 @@ def train(
 if __name__ == "__main__":
 
     # TODO:
-    # - Compute correctly predicted switches (from 0-1 without seeing 1 first and vice versa)
-    # - Add baseline simply copying past prediction
+    # - Incorporate replay buffer (maybe include timestep embedding)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps_per_batch", type=int, default=1)
@@ -136,7 +138,7 @@ if __name__ == "__main__":
         elif args.model == "copy":
             model = CopyModel(data.num_classes)
         else:
-            raise ValueError(f"Model {model} not supported")
+            raise ValueError(f"Model {args.model} not supported")
 
         print(f"MODEL SIZE: {sum(p.numel() for p in model.parameters())}")
 
@@ -155,6 +157,10 @@ if __name__ == "__main__":
         total_probs.append(probs)
         total_preds.append(preds)
         total_labels.append(labels)
+
+    total_probs = np.array(total_probs)
+    total_preds = np.array(total_preds)
+    total_labels = np.array(total_labels)
 
     print("*" * 10)
     print("FINAL RESULTS")

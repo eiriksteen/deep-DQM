@@ -13,7 +13,7 @@ class RefFilter(nn.Module):
         self.proj = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            # nn.Dropout(0.2),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
