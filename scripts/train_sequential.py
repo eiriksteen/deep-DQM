@@ -26,7 +26,7 @@ from dqm.deep_models import (
 from dqm.shallow_models import LinearRegressor, CopyModel
 from dqm.torch_datasets import LHCb2018SequentialDataset
 from dqm.replay_buffer import ReplayBuffer
-from dqm.settings import DATA_DIR, DEVICE, HISTO_NBINS
+from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import compute_results_summary, plot_metrics_per_step
 
 
@@ -159,8 +159,8 @@ if __name__ == "__main__":
         if args.model == "mlp":
             model = MLP(data.num_features, data.num_classes)
         elif args.model == "tran":
-            model = Transformer(100, data.num_features,
-                                data.num_bins, data.num_classes)
+            model = Transformer(
+                data.num_bins, data.num_features, 128, data.num_classes)
         elif args.model == "resnet1d":
             model = ResNet1D(data.num_features, 32, data.num_classes)
         elif args.model == "linear":
@@ -178,11 +178,7 @@ if __name__ == "__main__":
 
         print(f"MODEL SIZE: {sum(p.numel() for p in model.parameters())}")
 
-        probs, preds, labels = train(
-            model,
-            data,
-            args
-        )
+        probs, preds, labels = train(model, data, args)
 
         print(f"BALANCED ACCURACY: {balanced_accuracy_score(labels, preds)}")
         print(f"ROC AUC: {roc_auc_score(labels, probs)}")
