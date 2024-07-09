@@ -32,6 +32,7 @@ class LHCb2018SequentialDataset(Dataset):
         self.num_classes = self.labels.max() + 1
         self.num_pos = len(self.labels[self.labels == 1])
         self.num_neg = len(self.labels[self.labels == 0])
+        self.num_bins = 100 if undo_concat else None
 
         if undo_concat:
             self.undo_concat()

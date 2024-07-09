@@ -12,7 +12,9 @@ class ResBlock1D(nn.Module):
             nn.Conv1d(channels, channels, 5, 1, 2),
         )
 
-        self.norm = nn.BatchNorm1d(channels)
+        # Since the batch statistics are nonstationary,
+        # identity is probably better than norming
+        self.norm = nn.Identity()  # nn.BatchNorm1d(channels)
 
     def forward(self, x):
         return self.norm(self.block(x) + x)

@@ -144,3 +144,5 @@ HISTO_NBINS_DICT = {
     '/Track/TrackVertexMonitor/fast track IP Y vs eta': 20,
     '/Track/TrackVertexMonitor/fast track IP X vs phi': 20
 }
+
+HISTO_NBINS = [v for v in HISTO_NBINS_DICT.values() if v != 0]

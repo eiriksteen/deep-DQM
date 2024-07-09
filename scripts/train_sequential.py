@@ -18,6 +18,7 @@ from sklearn.metrics import (
 from dqm.deep_models import (
     MLP,
     ResNet1D,
+    Transformer,
     CNN1D,
     CNN2D,
     RefFilter
@@ -25,7 +26,7 @@ from dqm.deep_models import (
 from dqm.shallow_models import LinearRegressor, CopyModel
 from dqm.torch_datasets import LHCb2018SequentialDataset
 from dqm.replay_buffer import ReplayBuffer
-from dqm.settings import DATA_DIR, DEVICE
+from dqm.settings import DATA_DIR, DEVICE, HISTO_NBINS
 from dqm.utils import compute_results_summary, plot_metrics_per_step
 
 
@@ -106,24 +107,25 @@ def train(model, data, args):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--steps_per_batch", type=int, default=8)
+    parser.add_argument("--steps_per_batch", type=int, default=16)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--replay_pos_ratio", type=float, default=1.0)
     # replay ratio as a fraction of the batch size
     # (0.5 means there are 0.5 * batch_size replayed samples,
     # while there are batch_size new samples)
-    parser.add_argument("--replay_ratio", type=float, default=1.5)
-    parser.add_argument("--undo_concat", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--model", type=str, default="mlp")
+    parser.add_argument("--replay_ratio", type=float, default=1.0)
+    parser.add_argument("--model", type=str, default="tran")
     args = parser.parse_args()
 
-    models = ["mlp", "resnet1d", "linear",
+    models = ["mlp", "tran", "resnet1d", "linear",
               "cnn1d", "cnn2d", "ref_filter", "copy"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
+
+    undo_concat = args.model in ["resnet1d", "cnn1d", "cnn2d", "tran"]
 
     out_dir = Path(f"./sequential_train_results_{args.model}")
     out_dir.mkdir(exist_ok=True)
@@ -137,7 +139,7 @@ if __name__ == "__main__":
         whiten=True,
         whiten_running=True,
         to_torch=True,
-        undo_concat=args.undo_concat
+        undo_concat=undo_concat
     )
 
     print("*" * 10)
@@ -155,22 +157,19 @@ if __name__ == "__main__":
         print(f"RUN {run + 1}/{args.n_runs}")
 
         if args.model == "mlp":
-            assert not args.undo_concat, "MLP requires not undo_concat"
             model = MLP(data.num_features, data.num_classes)
+        elif args.model == "tran":
+            model = Transformer(100, data.num_features,
+                                data.num_bins, data.num_classes)
         elif args.model == "resnet1d":
-            assert args.undo_concat, "ResNet1D requires undo_concat"
             model = ResNet1D(data.num_features, 32, data.num_classes)
         elif args.model == "linear":
-            assert not args.undo_concat, "Linear requires not undo_concat"
             model = LinearRegressor(data.num_features, data.num_classes)
         elif args.model == "cnn1d":
-            assert args.undo_concat, "CNN1D requires undo_concat"
             model = CNN1D(data.num_features, 32, data.num_classes)
         elif args.model == "cnn2d":
-            assert args.undo_concat, "CNN2D requires undo_concat"
             model = CNN2D(1, 32, data.num_classes)
         elif args.model == "ref_filter":
-            assert not args.undo_concat, "RefFilter requires not undo_concat"
             model = RefFilter(data.num_features, 512)
         elif args.model == "copy":
             model = CopyModel(data.num_classes)

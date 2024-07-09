@@ -1,4 +1,3 @@
-from pathlib import Path
 import numpy as np
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -11,6 +10,7 @@ from sklearn.metrics import (
     average_precision_score,
     balanced_accuracy_score
 )
+from pathlib import Path
 
 sns.set_style("white")
 
