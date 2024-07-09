@@ -18,6 +18,31 @@ plt.rc("figure", figsize=(20, 10))
 plt.rc("font", size=13)
 
 
+def rebin(old_hist, new_bin_count) -> np.ndarray:
+
+    old_hist = np.array(old_hist)
+    old_bin_count = len(old_hist)
+    old_edges = np.linspace(0, old_bin_count, old_bin_count + 1)
+    old_widths = np.diff(old_edges)
+    old_centers = (old_edges[:-1] + old_edges[1:]) / 2
+    new_edges = np.linspace(0, old_bin_count, new_bin_count + 1)
+    new_hist = np.zeros(new_bin_count)
+
+    for i, (left, right) in enumerate(zip(new_edges[:-1], new_edges[1:])):
+        mask = (old_centers >= left) & (old_centers < right)
+
+        if np.any(mask):
+            left_fractions = np.maximum(0, np.minimum(
+                right, old_edges[1:]) - np.maximum(left, old_edges[:-1]))
+            right_fractions = np.maximum(0, np.minimum(
+                right, old_edges[1:]) - np.maximum(left, old_edges[:-1]))
+            fractions = (left_fractions + right_fractions) / 2 / old_widths
+
+            new_hist[i] = np.max(old_hist[mask] * fractions[mask])
+
+    return new_hist
+
+
 def filter_flips(scores: np.ndarray,
                  preds: np.ndarray,
                  labels: np.ndarray):

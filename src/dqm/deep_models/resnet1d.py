@@ -25,7 +25,7 @@ class ResNet1D(nn.Module):
             in_channels,
             hidden_channels,
             num_classes,
-            mlp_dim=1160
+            mlp_dim=416
     ):
         super().__init__()
 
@@ -36,7 +36,7 @@ class ResNet1D(nn.Module):
             ResBlock1D(hidden_channels),
             nn.Conv1d(hidden_channels, hidden_channels, 5, 2, 2),
             ResBlock1D(hidden_channels),
-            nn.Conv1d(hidden_channels, hidden_channels, 5, 2, 2),
+            nn.Conv1d(hidden_channels, hidden_channels, 5, 2, 2)
         )
 
         self.mlp = nn.Sequential(
@@ -49,7 +49,7 @@ class ResNet1D(nn.Module):
 
     def forward(self, x):
 
-        logits = self.fcn(x.unsqueeze(1))
+        logits = self.fcn(x)
         out = self.mlp(logits)
 
         return out

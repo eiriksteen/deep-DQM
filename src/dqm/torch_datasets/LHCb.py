@@ -4,16 +4,20 @@ import torch
 import pathlib as Path
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+from ..utils import rebin
+from ..settings import HISTO_NBINS_DICT
 
 
 class LHCb2018SequentialDataset(Dataset):
 
     def __init__(
-            self,
-            data_path: Path,
-            center_and_normalize: bool = True,
-            running_center_and_normalize: bool = True,
-            to_torch: bool = True):
+        self,
+        data_path: Path,
+        whiten: bool = True,
+        whiten_running: bool = True,
+        to_torch: bool = True,
+        undo_concat: bool = False
+    ):
 
         super().__init__()
 
@@ -29,10 +33,13 @@ class LHCb2018SequentialDataset(Dataset):
         self.num_pos = len(self.labels[self.labels == 1])
         self.num_neg = len(self.labels[self.labels == 0])
 
-        if center_and_normalize:
+        if undo_concat:
+            self.undo_concat()
+
+        if whiten:
             self.whiten()
 
-        if running_center_and_normalize:
+        if whiten_running:
             self.whiten_running()
 
     def __len__(self):
@@ -57,15 +64,18 @@ class LHCb2018SequentialDataset(Dataset):
 
     def whiten(self):
 
-        mu = self.data.mean(axis=1, keepdims=True)
-        std = self.data.std(axis=1, keepdims=True)
+        # Try normalizing only the non-zeros
+        mu = self.data.mean(axis=-1, keepdims=True)
+        std = self.data.std(axis=-1, keepdims=True)
         std = np.where(std < 1e-06, 1e-06, std)
         self.data = (self.data - mu) / std
 
     def whiten_running(self):
 
         data_cusum = np.cumsum(self.data, axis=0)
-        running_mean = data_cusum / np.arange(1, self.size + 1)[:, None]
+        cu_slice = np.s_[:, None] if self.data.ndim == 2 else np.s_[
+            :, None, None]
+        running_mean = data_cusum / np.arange(1, self.size + 1)[cu_slice]
 
         running_std = np.zeros_like(self.data)
         for t in range(1, self.size):
@@ -83,6 +93,35 @@ class LHCb2018SequentialDataset(Dataset):
         neg_idx = np.where(self.labels == 0)[0].tolist()
 
         return pos_idx, neg_idx
+
+    def undo_concat(self):
+
+        num_bins = 100
+        histo_nbins = [v for v in HISTO_NBINS_DICT.values() if v != 0]
+        rebinned_data = np.zeros((self.size, len(histo_nbins), num_bins))
+
+        prev_idx = 0
+        for bin_num, size in enumerate(histo_nbins):
+            bin = self.data[:, prev_idx:prev_idx + size]
+
+            if size > num_bins:
+                # Should parallelize this
+                for b in range(size):
+                    rebinned_data[b, bin_num] = rebin(
+                        bin[b], new_bin_count=num_bins)
+            elif size < num_bins:
+                padding = np.zeros((self.size, num_bins - size))
+                rebinned_data[:, bin_num] = np.concatenate(
+                    (bin, padding), axis=-1)
+            else:
+                rebinned_data[:, bin_num] = bin
+
+            prev_idx += size
+
+        self.data = rebinned_data
+        self.num_features = len(histo_nbins)
+
+        print(f"Data shape after undoing concat: {self.data.shape}")
 
 
 class LHCb2018TempSplitDataset(Dataset):
