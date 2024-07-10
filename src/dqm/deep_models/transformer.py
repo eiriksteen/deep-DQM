@@ -56,7 +56,7 @@ class MultiHeadAttentionBlock(nn.Module):
         out = self.proj(attn_logits.reshape(b, s, d))
         out = self.dropout(out)
 
-        return self.norm(x + out)
+        return self.norm(x + out), attn_weights
 
 
 class MLPBlock(nn.Module):
@@ -88,31 +88,33 @@ class Transformer(nn.Module):
 
         super().__init__()
 
+        # TODO: Extract attention maps to determine which hist has anomaly
+
         self.patch_size = patch_size
         self.in_dim = in_dim
         self.hidden_dim = hidden_dim
         self.num_classes = num_classes
 
-        self.proj = nn.Sequential(
+        self.embed = nn.Sequential(
             nn.Linear(patch_size, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        self.network = nn.Sequential(
-            MultiHeadAttentionBlock(
-                hidden_dim,
-                apply_relative_pos_bias=False,
-                in_dim=in_dim),
-            MLPBlock(hidden_dim)
-        )
+        # self.variable_embedding = nn.Embedding(self.in_dim, hidden_dim)
+
+        self.mha = MultiHeadAttentionBlock(
+            hidden_dim, apply_relative_pos_bias=False, in_dim=in_dim)
+
+        self.mlp = MLPBlock(hidden_dim)
 
         self.head = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, x):
 
-        logits = self.proj(x)
-        logits = self.network(logits)
+        embeddings = self.embed(x)  # + self.variable_embedding.weight
+        attn_logits, attn_weights = self.mha(embeddings)
+        logits = self.mlp(attn_logits)
         out = self.head(logits.mean(dim=1))
 
-        return out
+        return {"logits": out, "var_dist": attn_weights}

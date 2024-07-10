@@ -74,4 +74,4 @@ class CNN2D(nn.Module):
         logits = self.fcn(x.unsqueeze(1))
         out = self.head(logits)
 
-        return out
+        return {"logits": out}

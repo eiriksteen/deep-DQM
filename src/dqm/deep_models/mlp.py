@@ -16,4 +16,5 @@ class MLP(nn.Module):
         )
 
     def forward(self, x):
-        return self.network(x)
+        out = self.network(x)
+        return {"logits": out}

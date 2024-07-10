@@ -28,4 +28,4 @@ class RefFilter(nn.Module):
         sim = torch.stack([sim1, sim2], dim=-1)
         out = F.softmax(sim, dim=-1)
 
-        return out
+        return {"logits": out}

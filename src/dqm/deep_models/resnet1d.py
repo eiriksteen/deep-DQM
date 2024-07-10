@@ -54,4 +54,4 @@ class ResNet1D(nn.Module):
         logits = self.fcn(x)
         out = self.mlp(logits)
 
-        return out
+        return {"logits": out}

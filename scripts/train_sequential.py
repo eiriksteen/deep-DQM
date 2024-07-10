@@ -38,7 +38,7 @@ plt.rc("font", size=13)
 torch.manual_seed(0)
 
 
-def train(model, data, args):
+def train(model, data, args, plot=False):
 
     requires_grad = not isinstance(model, CopyModel)
     model = model.to(DEVICE)
@@ -66,7 +66,8 @@ def train(model, data, args):
         is_anomaly = sample["is_anomaly"].to(DEVICE)
 
         # Run the model on the current batch
-        logits = model(histogram)[:len(is_anomaly)]
+        out = model(histogram)
+        logits = out["logits"][:len(is_anomaly)]
         loss = loss_fn(logits, is_anomaly)
         loss_total += loss.item()
 
@@ -90,7 +91,7 @@ def train(model, data, args):
                 histogram_resampled, is_anomaly_resampled = replay_buffer(
                     histogram, is_anomaly)
 
-                logits = model(histogram_resampled)
+                logits = model(histogram_resampled)["logits"]
                 loss = loss_fn(logits, is_anomaly_resampled)
                 optimizer.zero_grad()
                 loss.backward()
@@ -101,6 +102,38 @@ def train(model, data, args):
         else:
             model.update(is_anomaly)
 
+        if plot and batch_num % 5 == 0 and batch_num > 0:
+            assert "var_dist" in out.keys(), "can only plot attention weights for Transformer model"
+            attn_weight_dir = out_dir / "attention_weights"
+            attn_weight_dir.mkdir(exist_ok=True)
+            var_dist = out["var_dist"].detach().cpu().numpy().mean(1)
+
+            num_samples = len(var_dist)
+            _, axes = plt.subplots(
+                nrows=num_samples, ncols=2, figsize=(10, 5 * num_samples))
+
+            axes = np.atleast_1d(axes)
+
+            print("Plotting attention weights...")
+            for i, ax in enumerate(axes):
+                label_value = labels[i].item()
+                pred_value = preds[i].item()
+                top_act_idx = var_dist[i].mean(0).argmax().item()
+                hist = histogram[i, top_act_idx].detach().cpu().numpy()
+
+                sns.heatmap(var_dist[i], ax=ax[0], cmap="YlGnBu", cbar=True)
+                ax[0].set_title(
+                    f"Attention Weights\nLabel: {label_value}, Pred: {pred_value}")
+                ax[0].set_xlabel("Target")
+                ax[0].set_ylabel("Source")
+                ax[1].plot(hist)
+                ax[1].set_title(
+                    f"Histogram with Strongest Activation")
+
+            plt.tight_layout()
+            plt.savefig(attn_weight_dir / f"{batch_num}.png")
+            plt.close()
+
     return total_probs, total_preds, total_labels
 
 
@@ -109,7 +142,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps_per_batch", type=int, default=16)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--replay_pos_ratio", type=float, default=1.0)
     # replay ratio as a fraction of the batch size
@@ -117,6 +150,7 @@ if __name__ == "__main__":
     # while there are batch_size new samples)
     parser.add_argument("--replay_ratio", type=float, default=1.0)
     parser.add_argument("--model", type=str, default="tran")
+    parser.add_argument("--plot", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
     models = ["mlp", "tran", "resnet1d", "linear",
@@ -178,7 +212,7 @@ if __name__ == "__main__":
 
         print(f"MODEL SIZE: {sum(p.numel() for p in model.parameters())}")
 
-        probs, preds, labels = train(model, data, args)
+        probs, preds, labels = train(model, data, args, plot=args.plot)
 
         print(f"BALANCED ACCURACY: {balanced_accuracy_score(labels, preds)}")
         print(f"ROC AUC: {roc_auc_score(labels, probs)}")

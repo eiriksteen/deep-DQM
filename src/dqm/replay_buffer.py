@@ -24,28 +24,30 @@ class ReplayBuffer:
 
     def get_rand_past_samples(self):
 
-        idx_neg = self.neg_idx[:np.searchsorted(self.neg_idx, self.cur_idx)]
-        idx_pos = self.pos_idx[:np.searchsorted(self.pos_idx, self.cur_idx)]
+        cur_idx_neg = self.neg_idx[:np.searchsorted(
+            self.neg_idx, self.cur_idx)]
+        cur_idx_pos = self.pos_idx[:np.searchsorted(
+            self.pos_idx, self.cur_idx)]
         hists, labels = [], []
 
-        if idx_neg and self.neg_buffer_size > 0:
+        if cur_idx_neg and self.neg_buffer_size > 0:
 
-            replace_neg = len(idx_neg) < self.neg_buffer_size
+            replace_neg = len(cur_idx_neg) < self.neg_buffer_size
 
             rand_idx_neg = np.random.choice(
-                idx_neg, self.neg_buffer_size, replace=replace_neg)
+                cur_idx_neg, self.neg_buffer_size, replace=replace_neg)
 
             neg_samples = [self.dataset[i] for i in rand_idx_neg]
 
             hists.append(torch.stack([s["histogram"] for s in neg_samples]))
             labels.append(torch.stack([s["is_anomaly"] for s in neg_samples]))
 
-        if idx_pos and self.pos_buffer_size > 0:
+        if cur_idx_pos and self.pos_buffer_size > 0:
 
-            replace_pos = len(idx_pos) < self.pos_buffer_size
+            replace_pos = len(cur_idx_pos) < self.pos_buffer_size
 
             rand_idx_pos = np.random.choice(
-                idx_pos, self.pos_buffer_size, replace=replace_pos)
+                cur_idx_pos, self.pos_buffer_size, replace=replace_pos)
 
             pos_samples = [self.dataset[i] for i in rand_idx_pos]
 
