@@ -73,20 +73,21 @@ class ContextMLP(nn.Module):
         self.pos_embed = nn.Embedding(in_channels, in_dim)
 
         self.network = nn.Sequential(
-            nn.Linear(2*in_dim, hidden_dim),
+            nn.Linear(3*in_dim, hidden_dim),
             MLPBlock(hidden_dim, hidden_dim),
         )
 
         self.head = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor, reference: torch.Tensor):
 
-        x_pos = torch.cat(
-            (x, self.pos_embed.weight.repeat(x.shape[0], 1, 1)), dim=-1)
+        ref = reference.to(x.device).repeat(x.shape[0], 1, 1)
+        pw = self.pos_embed.weight.repeat(x.shape[0], 1, 1)
+        x_ = torch.cat((x, ref, pw), dim=-1)
 
-        logits = self.network(x_pos)
+        logits = self.network(x_)
         scores = self.head(logits)
         out = scores.max(dim=1).values
         prob_scores = F.sigmoid(scores)
 
-        return {"logits": out, "scores": prob_scores}
+        return {"logits": out, "prob": prob_scores}

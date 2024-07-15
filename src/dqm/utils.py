@@ -49,6 +49,9 @@ def filter_flips(scores: np.ndarray,
                  preds: np.ndarray,
                  labels: np.ndarray):
 
+    scores = np.array(scores)
+    preds = np.array(preds)
+    labels = np.array(labels)
     flip_idx = np.where(labels[:-1] != labels[1:])[0] + 1
     flip_scores = scores[flip_idx]
     flip_preds = preds[flip_idx]
@@ -100,7 +103,7 @@ def plot_scores(
     num_samples = len(scores)
     _, axes = plt.subplots(
         nrows=num_samples, ncols=2, figsize=(10, 5 * num_samples))
-    axes = np.atleast_1d(axes)
+    axes = np.atleast_2d(axes)
 
     for i, ax in enumerate(axes):
         label_value = labels[i].item()
@@ -121,7 +124,7 @@ def plot_scores(
         )
         ax[0].set_title(f"Scores\nLabel: {label_value}, Pred: {pred_value}")
         ax[0].set_xlabel("Histogram number")
-        ax[0].set_ylabel("Score")
+        ax[0].set_ylabel("Anomaly Probability")
         ax[1].plot(hist)
         ax[1].set_title(f"Histogram with Strongest Activation\nCategory: {
                         categories[top_act_idx]}")

@@ -1,5 +1,6 @@
 import argparse
 import json
+from matplotlib import pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from tqdm import tqdm
 from sklearn.metrics import (
     average_precision_score,
     balanced_accuracy_score,
+    accuracy_score,
     f1_score
 )
 from dqm.deep_models import (
@@ -18,7 +20,8 @@ from dqm.deep_models import (
     Transformer,
     CNN1D,
     CNN2D,
-    ContextMLP
+    ContextMLP,
+    RefBuilder
 )
 from dqm.shallow_models import LinearRegressor, CopyModel
 from dqm.torch_datasets import LHCbDataset
@@ -28,7 +31,8 @@ from dqm.utils import (
     compute_results_summary,
     plot_metrics_per_step,
     plot_attn_weights,
-    plot_scores
+    plot_scores,
+    filter_flips
 )
 
 
@@ -54,10 +58,13 @@ def train(
             pos_ratio=args.replay_pos_ratio
         )
 
+        ref_builder = RefBuilder(data.num_features, data.num_bins).to(DEVICE)
+        reference = torch.zeros(data.num_features, data.num_bins).to(DEVICE)
+
     loss_fn = nn.BCEWithLogitsLoss()
     loader = DataLoader(data, batch_size=args.batch_size, shuffle=False)
 
-    total_probs, total_preds, total_labels = [], [], []
+    total_probs, total_preds, total_labels, alphas = [], [], [], []
     loss_total = 0
 
     for batch_num, sample in enumerate(tqdm(loader)):
@@ -68,20 +75,25 @@ def train(
         is_anomaly = sample["is_anomaly"].to(DEVICE)
 
         # Run the model on the current batch
-        out = model(histogram)
+        out = model(histogram, reference)
         logits = out["logits"][:len(is_anomaly)]
 
         loss = loss_fn(logits, is_anomaly)
         loss_total += loss.item()
 
-        # Don't evaluate the model before it has seen anything
         if batch_num > 0:
+            # Compute outputs for evaluation
             probs = F.sigmoid(logits)
             preds = torch.where(logits > 0.5, 1, 0)
 
             total_labels += is_anomaly.detach().cpu().tolist()
             total_preds += preds.detach().cpu().tolist()
             total_probs += probs.detach().cpu().tolist()
+            alphas += alpha.detach().cpu().tolist()
+        else:
+            prev_ref = torch.zeros_like(reference)
+            prev_hist = torch.zeros_like(histogram)
+            prev_is_anomaly = torch.zeros_like(is_anomaly)
 
         if requires_grad:
 
@@ -89,17 +101,40 @@ def train(
             model.train()
             for _ in range(args.steps_per_batch):
 
+                # Train the reference builder on the previous batch
+                # (learn how to adapt alpha)
+                train_alpha = ref_builder(prev_hist, prev_ref)
+                train_ref = ref_builder.update_reference(
+                    prev_hist,
+                    prev_is_anomaly,
+                    prev_ref,
+                    train_alpha
+                )
+
                 # Resample from replay buffer each step (simulate epochs)
                 histogram_resampled, is_anomaly_resampled = replay_buffer(
                     histogram, is_anomaly)
 
-                logits = model(histogram_resampled)["logits"]
+                logits = model(histogram_resampled, train_ref)["logits"]
                 loss = loss_fn(logits, is_anomaly_resampled)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
             replay_buffer.update(args.batch_size)
+
+            # Update the reference
+            alpha = ref_builder(histogram, reference)
+            reference = ref_builder.update_reference(
+                histogram,
+                is_anomaly,
+                reference,
+                alpha
+            ).detach()
+
+            prev_ref = reference
+            prev_hist = histogram
+            prev_is_anomaly = is_anomaly
 
         else:
             model.update(is_anomaly)
@@ -114,14 +149,17 @@ def train(
                 plot_attn_weights(attn_weights, histogram, is_anomaly,
                                   preds, attn_weight_dir / f"{batch_num}.png")
 
-            elif "scores" in out.keys():
-                scores_dir = out_dir / "scores"
+            elif "prob" in out.keys():
+                scores_dir = out_dir / "probs"
                 scores_dir.mkdir(exist_ok=True)
-                scores = out["scores"].detach().cpu().numpy()
+                scores = out["prob"].detach().cpu().numpy()
 
                 categories = data.get_histogram_names()
                 plot_scores(scores, categories, histogram, is_anomaly,
                             preds, scores_dir / f"{batch_num}.png")
+
+    plt.plot(alphas)
+    plt.savefig(out_dir / "alphas.png")
 
     return total_probs, total_preds, total_labels
 
@@ -213,8 +251,10 @@ if __name__ == "__main__":
         print(f"MODEL SIZE: {sum(p.numel() for p in model.parameters())}")
 
         probs, preds, labels = train(model, data, args, plot=args.plot)
+        _, flip_preds, flip_labels = filter_flips(probs, preds, labels)
 
         print(f"BALANCED ACCURACY: {balanced_accuracy_score(labels, preds)}")
+        print(f"ACCURACY FLIPS: {accuracy_score(flip_labels, flip_preds)}")
         print(f"AP: {average_precision_score(labels, probs)}")
         print(f"F1: {f1_score(labels, preds)}")
 
