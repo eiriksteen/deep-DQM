@@ -5,7 +5,7 @@ from sklearn import metrics
 from pathlib import Path
 from tqdm import tqdm
 from optuna.samplers import TPESampler
-from ..settings import HISTO_NBINS_DICT
+from ..settings import HISTO_NBINS_DICT_2018, HISTO_NBINS_DICT_2023
 
 
 class ChiSquareModel:
@@ -13,6 +13,7 @@ class ChiSquareModel:
     def __init__(
             self,
             data_path: Path,
+            year: int = 2018,
             eps: float = 1e-9,
             alpha: float = 0.7,
             EWMA_par1: float = 0.99,
@@ -38,7 +39,12 @@ class ChiSquareModel:
         self.histograms = df[input_var_cols].to_numpy()
         self.is_anomaly = 1 - df['all_OK'].to_numpy()
 
-        self.histo_nbins = np.array(list(HISTO_NBINS_DICT.values()))
+        if year == 2018:
+            self.hist_nbins_dict = HISTO_NBINS_DICT_2018
+        elif year == 2023:
+            self.hist_nbins_dict = HISTO_NBINS_DICT_2023
+
+        self.histo_nbins = np.array(list(self.hist_nbins_dict.values()))
         self.histo_nbins = self.histo_nbins[np.where(self.histo_nbins != 0)[0]]
         self.n_bins = self.histograms.shape[-1]
 
@@ -73,7 +79,7 @@ class ChiSquareModel:
 
         return eps_good_list, eps_bad_list, eps_balanced_weighed_list
 
-    def run_algorithm(self, x: np.ndarray, y: np.ndarray, alpha: float):
+    def run_algorithm(self, x, y, α):
 
         first_good_run = -1
         second_good_run = -1
@@ -103,20 +109,29 @@ class ChiSquareModel:
 
         suma_x_st = x_st.sum()
         suma_x_nd = x_nd.sum()
-        suma_x0_ = (1 - self.alpha) * suma_x_nd + self.alpha * suma_x_st
+        suma_x0_ = (1 - α) * suma_x_nd + α * suma_x_st
 
-        x_st = x_st / suma_x_st
-        x_nd = x_nd / suma_x_nd
+        if suma_x_st != 0 and suma_x_nd != 0:
+            x_st = x_st / suma_x_st
+            x_nd = x_nd / suma_x_nd
+            σz = np.sqrt(x_nd / suma_x_nd - x_nd**2 / suma_x_nd)
+            σz[x_nd == 0] = 1 / suma_x_nd
+        elif suma_x_st == 0 and suma_x_nd != 0:
+            x_nd = x_nd / suma_x_nd
+            σz = np.sqrt(x_nd / suma_x_nd - x_nd**2 / suma_x_nd)
+            σz[x_nd == 0] = 1 / suma_x_nd
+        elif suma_x_st != 0 and suma_x_nd == 0:
+            x_st = x_st / suma_x_st
+            σz = np.zeros(x_nd.shape[0])
+        elif suma_x_st == 0 and suma_x_nd == 0:
+            σz = np.zeros(x_nd.shape[0])
 
-        sigma_z = np.sqrt(x_nd / suma_x_nd - x_nd**2 / suma_x_nd)
-        sigma_z[x_nd == 0] = 1 / suma_x_nd
-
-        ω = 1 / (sigma_z**2 + self.eps)
-        W = (1 - self.alpha) * ω
-        S_mu = (1 - self.alpha) * ω * x_nd
-        S_sigma = (1 - self.alpha) * ω * (x_nd - x_st)**2
-        x0_ = S_mu / W
-        e0_ = np.sqrt(S_sigma / W)
+        ω = 1 / (σz**2 + self.eps)
+        W = (1 - α) * ω
+        Sμ = (1 - α) * ω * x_nd
+        Sσ = (1 - α) * ω * (x_nd - x_st)**2
+        x0_ = Sμ / W
+        e0_ = np.sqrt(Sσ / W)
 
         current_previous_good_run = second_good_run
         usable_run_numbers = []
@@ -126,77 +141,105 @@ class ChiSquareModel:
         ground_truth = []
         references = []
         x1s = []
-        sigma_i_x0 = []
-        sigma_p_x1 = []
+        σ_i_x0 = []
+        σ_p_x1 = []
 
         for i in range(first_usable_run, len(y)):
 
             if current_previous_good_run != previous_good_run[i]:
                 x_upd = x[previous_good_run[i]]
                 suma_upd = x_upd.sum()
-                x_upd = x_upd / suma_upd
 
-                sigma_z = np.sqrt(x_upd / suma_upd - x_upd**2 / suma_upd)
-                sigma_z[x_upd == 0] = 1 / suma_upd
+                if suma_upd != 0:
+                    x_upd = x_upd / suma_upd
+                    σz = np.sqrt(x_upd / suma_upd - x_upd**2 / suma_upd)
+                    σz[x_upd == 0] = 1 / suma_upd
+                else:
+                    σz = np.zeros(x_nd.shape[0])
 
-                ω = 1 / (sigma_z**2 + self.eps)
-                W = self.alpha * W + (1 - self.alpha) * ω
+                ω = 1 / (σz**2 + self.eps)
+                W = α * W + (1 - α) * ω
 
-                S_sigma = self.alpha * S_sigma + \
-                    (1 - self.alpha) * ω * (x_upd - x0_)**2
-                e0_ = np.sqrt(S_sigma / W)
+                Sσ = α * Sσ + (1 - α) * ω * (x_upd - x0_)**2
+                e0_ = np.sqrt(Sσ / W)
 
-                S_mu = self.alpha * S_mu + (1 - self.alpha) * ω * x_upd
-                x0_ = S_mu / W
+                Sμ = α * Sμ + (1 - α) * ω * x_upd
+                x0_ = Sμ / W
 
-                suma_x0_ = (1 - self.alpha) * suma_upd + self.alpha * suma_x0_
+                suma_x0_ = (1 - α) * suma_upd + α * suma_x0_
                 current_previous_good_run = previous_good_run[i]
 
             gt = y[i]
             x1_ = x[i]
 
-            filter = np.logical_and(e0_ > 0, e0_ != np.inf)
-            ndof = np.sum(filter) - 1
-
-            x1_non_zero = x1_[filter]
-            x0_non_zero = x0_[filter]
-            e0_non_zero = e0_[filter]
-
-            suma_x1_non_zero = x1_non_zero.sum()
-            x1_non_zero = x1_non_zero / suma_x1_non_zero
-
-            sigma_x1_non_zero = np.sqrt(
-                x1_non_zero / suma_x1_non_zero - x1_non_zero**2 / suma_x1_non_zero)
-            sigma_x0_non_zero = np.sqrt(
-                x0_non_zero / suma_x0_ - x0_non_zero**2 / suma_x0_)
-
-            sigma_x1_non_zero[x1_non_zero == 0] = 1 / suma_x1_non_zero
-            sigma_x0_non_zero[x0_non_zero == 0] = 1 / suma_x0_
-
-            sigma_x1_ = np.sqrt(x1_) / x1_.sum()
-            sigma_x0_ = np.sqrt(x0_) / suma_x0_
-
-            sigma_x1_[x1_ == 0] = 1 / suma_x1_non_zero
-            sigma_x0_[x0_ == 0] = 1 / suma_x0_
-
-            if suma_x0_ >= suma_x1_non_zero:
-                x0_non_zero_resampled = np.random.normal(
-                    x0_non_zero, np.sqrt(e0_non_zero**2 + sigma_x1_non_zero**2))
-                χ2 = np.sum(
-                    (x1_non_zero - x0_non_zero_resampled)**2/(2*sigma_x1_non_zero**2 + e0_non_zero**2))
-                pulls.append(
-                    np.sum(
-                        (x1_non_zero - x0_non_zero_resampled)**2/(np.sqrt(2*sigma_x1_non_zero**2 + e0_non_zero**2)))
-                )
+            if np.sum(x1_.shape[0]) >= 2:
+                ndof = np.sum(x1_.shape[0]) - 1
+            elif np.sum(x1_.shape[0]) == 1:
+                ndof = 1
             else:
-                x1_resampled_non_zero = np.random.normal(
-                    x1_non_zero, np.sqrt(e0_non_zero**2 + sigma_x0_non_zero**2))
-                χ2 = np.sum(
-                    (x1_resampled_non_zero - x0_non_zero)**2/(sigma_x1_non_zero**2 + e0_non_zero**2 + sigma_x0_non_zero**2))
-                pulls.append(
-                    np.sum(
-                        (x1_resampled_non_zero - x0_non_zero)**2/(np.sqrt(sigma_x1_non_zero**2 + e0_non_zero**2 + sigma_x0_non_zero**2)))
-                )
+                ndof = 0
+
+            suma_x1_ = x1_.sum()
+
+            if suma_x1_ != 0 and suma_x0_ != 0 and np.abs(suma_x0_) > self.eps and np.abs(suma_x1_) > self.eps:
+                x1_ = x1_ / suma_x1_
+
+                σ_x1_ = np.sqrt(x1_ / suma_x1_ - x1_**2 / suma_x1_)
+                σ_x0_ = np.sqrt(x0_ / suma_x0_ - x0_**2 / suma_x0_)
+
+                σ_x1_[x1_ == 0] = 1 / suma_x1_
+                σ_x0_[x0_ == 0] = 1 / suma_x0_
+
+                if suma_x0_ >= suma_x1_:
+                    x0_resampled = np.random.normal(
+                        x0_, np.sqrt(e0_**2 + σ_x1_**2))
+                    χ2 = np.sum(
+                        (x1_ - x0_resampled)**2/(2*σ_x1_**2 + e0_**2))
+                    pulls.append(
+                        np.sum(
+                            (x1_ - x0_resampled)**2/(np.sqrt(2*σ_x1_**2 + e0_**2)))
+                    )
+                else:
+                    x1_resampled = np.random.normal(
+                        x1_, np.sqrt(e0_**2 + σ_x0_**2))
+                    χ2 = np.sum(
+                        (x1_resampled - x0_)**2/(σ_x1_**2 + e0_**2 + σ_x0_**2))
+                    pulls.append(
+                        np.sum(
+                            (x1_resampled - x0_)**2/(np.sqrt(σ_x1_**2 + e0_**2 + σ_x0_**2)))
+                    )
+
+            elif suma_x1_ == 0 and suma_x0_ != 0 and np.abs(suma_x0_) > self.eps:
+                σ_x1_ = np.zeros(x1_.shape[0])
+                σ_x0_ = np.sqrt(x0_ / suma_x0_ - x0_**2 / suma_x0_)
+                σ_x0_[x0_ == 0] = 1 / suma_x0_
+
+                x0_resampled = np.random.normal(
+                    x0_, np.sqrt(e0_**2 + σ_x1_**2))
+                χ2 = np.sum((x1_ - x0_resampled)**2/(2*σ_x1_**2 + e0_**2))
+                pulls.append(np.sum((x1_ - x0_resampled)**2 /
+                                    (np.sqrt(2*σ_x1_**2 + e0_**2))))
+
+            elif suma_x1_ != 0 and suma_x0_ == 0 and np.abs(suma_x1_) > self.eps:
+                x1_ = x1_ / suma_x1_
+
+                σ_x1_ = np.sqrt(x1_ / suma_x1_ - x1_**2 / suma_x1_)
+                σ_x0_ = np.zeros(x0_.shape[0])
+                σ_x1_[x1_ == 0] = 1 / suma_x1_
+
+                x1_resampled = np.random.normal(
+                    x1_, np.sqrt(e0_**2 + σ_x0_**2))
+                χ2 = np.sum((x1_resampled - x0_)**2 /
+                            (σ_x1_**2 + e0_**2 + σ_x0_**2))
+                pulls.append(np.sum((x1_resampled - x0_)**2 /
+                                    (np.sqrt(σ_x1_**2 + e0_**2 + σ_x0_**2))))
+
+            else:
+                σ_x1_ = np.zeros(x1_.shape[0])
+                σ_x0_ = np.zeros(x0_.shape[0])
+
+                χ2 = 0.
+                pulls.append(0.)
 
             ground_truth.append(gt)
             χ2s.append(χ2)
@@ -204,13 +247,12 @@ class ChiSquareModel:
             usable_run_numbers.append(i)
             references.append(x0_)
             x1s.append(x1_)
-            sigma_i_x0.append(np.sqrt(e0_**2))
-            sigma_p_x1.append(sigma_x1_)
+            σ_i_x0.append(np.sqrt(e0_**2))  # - σ_x0_**2))
+            σ_p_x1.append(σ_x1_)
 
-        out_arrs = [ground_truth, χ2s, ndofs, usable_run_numbers,
-                    pulls, references, x1s, sigma_i_x0, sigma_p_x1]
-
-        return (np.array(arr) for arr in out_arrs)
+        return np.array(ground_truth), np.array(χ2s), np.array(ndofs), np.array(usable_run_numbers), np.array(pulls), \
+            np.array(references), np.array(
+                x1s), np.array(σ_i_x0), np.array(σ_p_x1)
 
     def compute_score(self, trial):
 
@@ -292,7 +334,7 @@ class ChiSquareModel:
                 chisq_full += chisq
                 ndofs_full += ndofs
                 red_chisq_full_sep.append(chisq/ndofs)
-                names.append(list(HISTO_NBINS_DICT.keys())[counter])
+                names.append(list(self.hist_nbins_dict.keys())[counter])
                 references_all.append(references)
                 x1s_all.append(x1s)
                 sigma_i_x0_all.append(sigma_i_x0)

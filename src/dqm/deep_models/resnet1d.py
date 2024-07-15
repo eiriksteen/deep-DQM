@@ -26,7 +26,6 @@ class ResNet1D(nn.Module):
             self,
             in_channels,
             hidden_channels,
-            num_classes,
             mlp_dim=416
     ):
         super().__init__()
@@ -46,7 +45,7 @@ class ResNet1D(nn.Module):
             nn.Linear(mlp_dim, mlp_dim//2),
             nn.Dropout(0.2),
             nn.ReLU(),
-            nn.Linear(mlp_dim//2, num_classes),
+            nn.Linear(mlp_dim//2, 1),
         )
 
     def forward(self, x):

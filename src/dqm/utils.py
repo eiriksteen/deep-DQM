@@ -12,6 +12,8 @@ from sklearn.metrics import (
 )
 from pathlib import Path
 
+import torch
+
 sns.set_style("white")
 
 plt.rc("figure", figsize=(20, 10))
@@ -53,6 +55,80 @@ def filter_flips(scores: np.ndarray,
     flip_labels = labels[flip_idx]
 
     return flip_scores, flip_preds, flip_labels
+
+
+def plot_attn_weights(
+        attn_weights: torch.Tensor,
+        histogram: torch.Tensor,
+        labels: torch.Tensor,
+        preds: torch.Tensor,
+        save_path: Path):
+
+    num_samples = len(attn_weights)
+    _, axes = plt.subplots(
+        nrows=num_samples, ncols=2, figsize=(10, 5 * num_samples))
+    axes = np.atleast_1d(axes)
+
+    for i, ax in enumerate(axes):
+        label_value = labels[i].item()
+        pred_value = preds[i].item()
+        top_act_idx = attn_weights[i].mean(0).argmax().item()
+        hist = histogram[i, top_act_idx].detach().cpu().numpy()
+
+        sns.heatmap(attn_weights[i], ax=ax[0],
+                    cmap="YlGnBu", cbar=True)
+        ax[0].set_title(f"Attention Weights\nLabel: {
+                        label_value}, Pred: {pred_value}")
+        ax[0].set_xlabel("Target")
+        ax[0].set_ylabel("Source")
+        ax[1].plot(hist)
+        ax[1].set_title(f"Histogram with Strongest Activation")
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def plot_scores(
+        scores: torch.Tensor,
+        categories: list,
+        histogram: torch.Tensor,
+        labels: torch.Tensor,
+        preds: torch.Tensor,
+        save_path: Path):
+
+    num_samples = len(scores)
+    _, axes = plt.subplots(
+        nrows=num_samples, ncols=2, figsize=(10, 5 * num_samples))
+    axes = np.atleast_1d(axes)
+
+    for i, ax in enumerate(axes):
+        label_value = labels[i].item()
+        pred_value = preds[i].item()
+        top_act_idx = scores[i].argmax().item()
+        hist = histogram[i, top_act_idx].detach().cpu().numpy()
+
+        color_palette = sns.color_palette("viridis", len(categories))
+        bar_width = 0.6
+
+        ax[0].bar(
+            list(range(len(categories))),
+            scores[i].squeeze(),
+            color=color_palette,
+            width=bar_width,
+            edgecolor='black',
+            linewidth=1
+        )
+        ax[0].set_title(f"Scores\nLabel: {label_value}, Pred: {pred_value}")
+        ax[0].set_xlabel("Histogram number")
+        ax[0].set_ylabel("Score")
+        ax[1].plot(hist)
+        ax[1].set_title(f"Histogram with Strongest Activation\nCategory: {
+                        categories[top_act_idx]}")
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
 
 
 def compute_results_summary(total_scores: np.ndarray,

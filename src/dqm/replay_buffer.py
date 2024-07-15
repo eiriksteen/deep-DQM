@@ -1,13 +1,13 @@
 import numpy as np
 import torch
-from .torch_datasets import LHCb2018SequentialDataset
+from .torch_datasets import LHCbDataset
 
 
 class ReplayBuffer:
 
     def __init__(
         self,
-        dataset: LHCb2018SequentialDataset,
+        dataset: LHCbDataset,
         buffer_size: int,
         pos_ratio: float = 0.5
     ):

@@ -4,32 +4,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def compute_rpb_idx(window_size: int):
-    w = torch.arange(window_size)
-    mg = torch.meshgrid(w, w)
-    return (mg[1] - mg[0] + window_size - 1).long()
-
-
 class MultiHeadAttentionBlock(nn.Module):
 
     def __init__(
             self,
             d,
-            num_heads=4,
-            causal=False,
-            apply_relative_pos_bias: bool = False,
-            in_dim: int | None = None,
+            num_heads=4
     ):
         super().__init__()
 
         self.num_heads = num_heads
-        self.causal = causal
-        self.apply_relative_pos_bias = apply_relative_pos_bias
-
-        if apply_relative_pos_bias:
-            self.rpb = nn.Parameter(torch.randn(2*in_dim - 1, num_heads))
-            self.register_buffer("rpb_idx", compute_rpb_idx(in_dim))
-
         self.norm = nn.LayerNorm(d)
         self.W = nn.Linear(d, 3*d)
         self.proj = nn.Linear(d, d)
@@ -43,14 +27,6 @@ class MultiHeadAttentionBlock(nn.Module):
                    for z in (q, k, v))
 
         attn = torch.einsum("bhqd,bhkd->bhqk", q, k) / (d**0.5)
-
-        if self.causal:
-            attn += float("-inf") * torch.triu(torch.ones(
-                x.shape[1], x.shape[1]), diagonal=1).to(x.device)
-
-        if self.apply_relative_pos_bias:
-            attn += self.rpb[self.rpb_idx].permute(2, 0, 1).unsqueeze(0)
-
         attn_weights = F.softmax(attn, dim=-1)
         attn_logits = attn_weights @ v
         out = self.proj(attn_logits.reshape(b, s, d))
@@ -81,40 +57,36 @@ class Transformer(nn.Module):
 
     def __init__(
             self,
-            patch_size: int,
             in_dim: int,
-            hidden_dim: int,
-            num_classes: int):
+            in_channels: int,
+            hidden_dim: int):
 
         super().__init__()
 
-        # TODO: Extract attention maps to determine which hist has anomaly
-
-        self.patch_size = patch_size
-        self.in_dim = in_dim
+        self.patch_size = in_dim
+        self.in_dim = in_channels
         self.hidden_dim = hidden_dim
-        self.num_classes = num_classes
 
         self.embed = nn.Sequential(
-            nn.Linear(patch_size, hidden_dim),
+            nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # self.variable_embedding = nn.Embedding(self.in_dim, hidden_dim)
-
-        self.mha = MultiHeadAttentionBlock(
-            hidden_dim, apply_relative_pos_bias=False, in_dim=in_dim)
+        self.mha = MultiHeadAttentionBlock(hidden_dim)
 
         self.mlp = MLPBlock(hidden_dim)
 
-        self.head = nn.Linear(hidden_dim, num_classes)
+        self.head = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
 
-        embeddings = self.embed(x)  # + self.variable_embedding.weight
+        embeddings = self.embed(x)
+
         attn_logits, attn_weights = self.mha(embeddings)
+
         logits = self.mlp(attn_logits)
+
         out = self.head(logits.mean(dim=1))
 
-        return {"logits": out, "var_dist": attn_weights}
+        return {"logits": out, "attn_weights": attn_weights}

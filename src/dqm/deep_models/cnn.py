@@ -7,7 +7,6 @@ class CNN1D(nn.Module):
             self,
             in_channels,
             hidden_channels,
-            num_classes,
             mlp_dim=416
     ):
         super().__init__()
@@ -23,7 +22,7 @@ class CNN1D(nn.Module):
 
         self.head = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(mlp_dim, num_classes)
+            nn.Linear(mlp_dim, 1)
         )
 
     def forward(self, x):
@@ -31,7 +30,7 @@ class CNN1D(nn.Module):
         logits = self.fcn(x)
         out = self.head(logits)
 
-        return out
+        return {"logits": out}
 
 
 class CNN2D(nn.Module):
@@ -40,7 +39,6 @@ class CNN2D(nn.Module):
             self,
             in_channels,
             hidden_channels,
-            num_classes,
             mlp_dim=512
     ):
         super().__init__()
@@ -66,7 +64,7 @@ class CNN2D(nn.Module):
             nn.Linear(mlp_dim, mlp_dim//2),
             nn.Dropout(0.2),
             nn.ReLU(),
-            nn.Linear(mlp_dim//2, num_classes)
+            nn.Linear(mlp_dim//2, 1)
         )
 
     def forward(self, x):
