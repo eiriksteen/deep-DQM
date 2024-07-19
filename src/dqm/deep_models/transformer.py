@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,11 +8,13 @@ class MultiHeadAttentionBlock(nn.Module):
     def __init__(
             self,
             d,
-            num_heads=4
+            num_heads=4,
+            sigmoid: bool = False
     ):
         super().__init__()
 
         self.num_heads = num_heads
+        self.sigmoid = sigmoid
         self.norm = nn.LayerNorm(d)
         self.W = nn.Linear(d, 3*d)
         self.proj = nn.Linear(d, d)
@@ -27,7 +28,12 @@ class MultiHeadAttentionBlock(nn.Module):
                    for z in (q, k, v))
 
         attn = torch.einsum("bhqd,bhkd->bhqk", q, k) / (d**0.5)
-        attn_weights = F.softmax(attn, dim=-1)
+
+        if self.sigmoid:
+            attn_weights = F.sigmoid(attn)
+        else:
+            attn_weights = F.softmax(attn, dim=-1)
+
         attn_logits = attn_weights @ v
         out = self.proj(attn_logits.reshape(b, s, d))
         out = self.dropout(out)
@@ -59,7 +65,9 @@ class Transformer(nn.Module):
             self,
             in_dim: int,
             in_channels: int,
-            hidden_dim: int):
+            hidden_dim: int,
+            sigmoid_attn: bool = False
+    ):
 
         super().__init__()
 
@@ -67,13 +75,19 @@ class Transformer(nn.Module):
         self.in_dim = in_channels
         self.hidden_dim = hidden_dim
 
+        self.pos_embed = nn.Embedding(in_channels, in_dim)
+
         self.embed = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
+            nn.Linear(2*in_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        self.mha = MultiHeadAttentionBlock(hidden_dim)
+        self.mha = MultiHeadAttentionBlock(
+            hidden_dim,
+            sigmoid=sigmoid_attn,
+            num_heads=8
+        )
 
         self.mlp = MLPBlock(hidden_dim)
 
@@ -81,12 +95,15 @@ class Transformer(nn.Module):
 
     def forward(self, x):
 
-        embeddings = self.embed(x)
+        pe = self.pos_embed.weight.repeat(x.shape[0], 1, 1)
+        x_ = torch.cat((x, pe), dim=-1)
 
+        embeddings = self.embed(x_)
         attn_logits, attn_weights = self.mha(embeddings)
-
         logits = self.mlp(attn_logits)
-
         out = self.head(logits.mean(dim=1))
 
-        return {"logits": out, "attn_weights": attn_weights}
+        scores = attn_weights.mean(dim=1)
+        scores = scores.mean(dim=1)
+
+        return {"logits": out, "attn_weights": attn_weights, "prob": scores}

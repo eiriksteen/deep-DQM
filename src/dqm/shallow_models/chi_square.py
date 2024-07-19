@@ -12,8 +12,9 @@ class ChiSquareModel:
 
     def __init__(
             self,
-            data_path: Path,
-            year: int = 2018,
+            histograms: np.ndarray,
+            is_anomaly: np.ndarray,
+            histo_nbins_dict: dict,
             eps: float = 1e-9,
             alpha: float = 0.7,
             EWMA_par1: float = 0.99,
@@ -24,6 +25,9 @@ class ChiSquareModel:
             num_optuna_trials: int = 100
     ):
 
+        self.histograms = histograms
+        self.is_anomaly = is_anomaly
+
         self.eps = eps
         self.alpha = alpha
         self.EWMA_par1 = EWMA_par1
@@ -33,17 +37,7 @@ class ChiSquareModel:
         self.beta = beta
         self.num_optuna_trials = num_optuna_trials
 
-        df = pd.read_csv(data_path, header=0)
-        input_var_cols = [
-            c for c in df.columns if 'var' in c and not 'err' in c]
-        self.histograms = df[input_var_cols].to_numpy()
-        self.is_anomaly = 1 - df['all_OK'].to_numpy()
-
-        if year == 2018:
-            self.hist_nbins_dict = HISTO_NBINS_DICT_2018
-        elif year == 2023:
-            self.hist_nbins_dict = HISTO_NBINS_DICT_2023
-
+        self.hist_nbins_dict = histo_nbins_dict
         self.histo_nbins = np.array(list(self.hist_nbins_dict.values()))
         self.histo_nbins = self.histo_nbins[np.where(self.histo_nbins != 0)[0]]
         self.n_bins = self.histograms.shape[-1]
@@ -329,7 +323,6 @@ class ChiSquareModel:
             ground_truth, chisq, ndofs, _, _, references, x1s, sigma_i_x0, sigma_p_x1 = self.run_algorithm(
                 self.histograms[:, index:index + size], self.is_anomaly, self.alpha)
             index += size
-            counter += 1
             if np.isnan(chisq).any() == False and np.isinf(chisq).any() == False:
                 chisq_full += chisq
                 ndofs_full += ndofs
@@ -339,6 +332,8 @@ class ChiSquareModel:
                 x1s_all.append(x1s)
                 sigma_i_x0_all.append(sigma_i_x0)
                 sigma_p_x1_all.append(sigma_p_x1)
+
+            counter += 1
 
         log_red_chisq = np.log(chisq_full / ndofs_full)
         red_chisq_full_sep = np.array(red_chisq_full_sep).T

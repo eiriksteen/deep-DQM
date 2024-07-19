@@ -1,10 +1,11 @@
 import argparse
 import json
-from matplotlib import pyplot as plt
+from pprint import pprint
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from matplotlib import pyplot as plt
 from pathlib import Path
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -12,7 +13,10 @@ from sklearn.metrics import (
     average_precision_score,
     balanced_accuracy_score,
     accuracy_score,
-    f1_score
+    f1_score,
+    precision_recall_curve,
+    roc_curve,
+    RocCurveDisplay
 )
 from dqm.deep_models import (
     MLP,
@@ -20,11 +24,10 @@ from dqm.deep_models import (
     Transformer,
     CNN1D,
     CNN2D,
-    ContextMLP,
-    RefBuilder
+    ContextMLP
 )
 from dqm.shallow_models import LinearRegressor, CopyModel
-from dqm.torch_datasets import LHCbDataset
+from dqm.torch_datasets import LHCbDataset, SyntheticDataset
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
@@ -36,16 +39,20 @@ from dqm.utils import (
 )
 
 
-torch.manual_seed(0)
+np.random.seed(42)
+torch.manual_seed(42)
 
 
 def train(
-        model: nn.Module,
-        data: LHCbDataset,
-        args: argparse.Namespace,
-        plot: bool = False):
+    model: nn.Module,
+    data: LHCbDataset,
+    args: argparse.Namespace,
+    plot: bool = False,
+    thresh_every: int = 5
+):
 
     requires_grad = not isinstance(model, CopyModel)
+    include_var_preds = isinstance(data, SyntheticDataset)
     model = model.to(DEVICE)
 
     if requires_grad:
@@ -58,15 +65,18 @@ def train(
             pos_ratio=args.replay_pos_ratio
         )
 
-        ref_builder = RefBuilder(data.num_features, data.num_bins).to(DEVICE)
-        reference = torch.zeros(data.num_features, data.num_bins).to(DEVICE)
-
     loss_fn = nn.BCEWithLogitsLoss()
     loader = DataLoader(data, batch_size=args.batch_size, shuffle=False)
 
-    total_probs, total_preds, total_labels, alphas = [], [], [], []
-    loss_total = 0
+    total_probs, total_labels, total_preds = [], [], []
+    if include_var_preds:
+        total_var_probs, total_var_labels, total_var_preds = [], [], []
 
+    loss_total = 0
+    optimal_thresh = 0.5
+
+    c = 0
+    t = 0
     for batch_num, sample in enumerate(tqdm(loader)):
 
         model.eval()
@@ -74,8 +84,12 @@ def train(
         histogram = sample["histogram"].to(DEVICE)
         is_anomaly = sample["is_anomaly"].to(DEVICE)
 
+        if include_var_preds:
+            var_labels = sample["anomaly_idx"].to(DEVICE)
+
         # Run the model on the current batch
-        out = model(histogram, reference)
+        out = model(histogram)
+
         logits = out["logits"][:len(is_anomaly)]
 
         loss = loss_fn(logits, is_anomaly)
@@ -84,16 +98,27 @@ def train(
         if batch_num > 0:
             # Compute outputs for evaluation
             probs = F.sigmoid(logits)
-            preds = torch.where(logits > 0.5, 1, 0)
+            preds = (probs > optimal_thresh).float()
 
-            total_labels += is_anomaly.detach().cpu().tolist()
-            total_preds += preds.detach().cpu().tolist()
-            total_probs += probs.detach().cpu().tolist()
-            alphas += alpha.detach().cpu().tolist()
-        else:
-            prev_ref = torch.zeros_like(reference)
-            prev_hist = torch.zeros_like(histogram)
-            prev_is_anomaly = torch.zeros_like(is_anomaly)
+            total_labels += is_anomaly.detach().flatten().cpu().tolist()
+            total_probs += probs.detach().flatten().cpu().tolist()
+            total_preds += preds.detach().flatten().cpu().tolist()
+
+            if include_var_preds:
+
+                if preds.count_nonzero():
+
+                    var_probs = out["prob"]
+                    var_preds = (var_probs > optimal_thresh).float()
+
+                    total_var_labels += var_labels.detach().cpu().tolist()
+                    total_var_probs += var_probs.detach().squeeze(-1).cpu().tolist()
+                    total_var_preds += var_preds.detach().squeeze(-1).cpu().tolist()
+
+            # if batch_num % thresh_every == 0:
+            #     if 0 in total_labels and 1 in total_labels:
+            #         fpr, tpr, thresholds = roc_curve(total_labels, total_probs)
+            #         optimal_thresh = thresholds[np.argmax(tpr - fpr)]
 
         if requires_grad:
 
@@ -101,21 +126,11 @@ def train(
             model.train()
             for _ in range(args.steps_per_batch):
 
-                # Train the reference builder on the previous batch
-                # (learn how to adapt alpha)
-                train_alpha = ref_builder(prev_hist, prev_ref)
-                train_ref = ref_builder.update_reference(
-                    prev_hist,
-                    prev_is_anomaly,
-                    prev_ref,
-                    train_alpha
-                )
-
                 # Resample from replay buffer each step (simulate epochs)
                 histogram_resampled, is_anomaly_resampled = replay_buffer(
                     histogram, is_anomaly)
 
-                logits = model(histogram_resampled, train_ref)["logits"]
+                logits = model(histogram_resampled)["logits"]
                 loss = loss_fn(logits, is_anomaly_resampled)
                 optimizer.zero_grad()
                 loss.backward()
@@ -123,63 +138,95 @@ def train(
 
             replay_buffer.update(args.batch_size)
 
-            # Update the reference
-            alpha = ref_builder(histogram, reference)
-            reference = ref_builder.update_reference(
-                histogram,
-                is_anomaly,
-                reference,
-                alpha
-            ).detach()
-
-            prev_ref = reference
-            prev_hist = histogram
-            prev_is_anomaly = is_anomaly
-
         else:
             model.update(is_anomaly)
 
-        if plot and batch_num > 0 and batch_num % (5 if args.year == 2018 else 2) == 0:
+        if plot and batch_num > 0:
 
             if "attn_weights" in out.keys():
                 attn_weight_dir = out_dir / "attention_weights"
                 attn_weight_dir.mkdir(exist_ok=True)
                 attn_weights = out["attn_weights"].detach(
                 ).cpu().numpy().mean(1)
-                plot_attn_weights(attn_weights, histogram, is_anomaly,
-                                  preds, attn_weight_dir / f"{batch_num}.png")
 
-            elif "prob" in out.keys():
+                if preds.count_nonzero():
+                    plot_attn_weights(attn_weights, histogram, is_anomaly,
+                                      preds, attn_weight_dir / f"{batch_num}.png")
+
+            if "prob" in out.keys():
                 scores_dir = out_dir / "probs"
                 scores_dir.mkdir(exist_ok=True)
-                scores = out["prob"].detach().cpu().numpy()
 
                 categories = data.get_histogram_names()
-                plot_scores(scores, categories, histogram, is_anomaly,
-                            preds, scores_dir / f"{batch_num}.png")
 
-    plt.plot(alphas)
-    plt.savefig(out_dir / "alphas.png")
+                if preds.count_nonzero():
+                    plot_scores(out["prob"], categories, histogram, is_anomaly,
+                                preds, scores_dir / f"{batch_num}.png",
+                                true_scores=var_labels if include_var_preds else None)
 
-    return total_probs, total_preds, total_labels
+    fpr, tpr, _ = roc_curve(total_labels, total_probs)
+    RocCurveDisplay(fpr=fpr, tpr=tpr).plot()
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.savefig(out_dir / "roc_curve.png")
+    plt.close()
+
+    precision, recall, _ = precision_recall_curve(
+        total_labels, total_probs)
+    plt.plot(recall, precision)
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.savefig(out_dir / "precision_recall_curve.png")
+    plt.close()
+
+    torch.save(model, out_dir / "model")
+
+    np.save(out_dir / "probs.npy", total_probs)
+    np.save(out_dir / "preds.npy", total_preds)
+    np.save(out_dir / "labels.npy", total_labels)
+
+    res = {
+        "probs": total_probs,
+        "preds": total_preds,
+        "labels": total_labels
+    }
+
+    if include_var_preds:
+        np.save(out_dir / "var_probs.npy", total_var_probs)
+        np.save(out_dir / "var_preds.npy", total_var_preds)
+        np.save(out_dir / "var_labels.npy", total_var_labels)
+
+        res.update({
+            "var_probs": total_var_probs,
+            "var_preds": total_var_preds,
+            "var_labels": total_var_labels
+        })
+
+    res = {k: np.array(v) for k, v in res.items()}
+
+    return res
 
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=2018)
-    parser.add_argument("--steps_per_batch", type=int, default=16)
+    parser.add_argument("--steps_per_batch", type=int, default=2)
     parser.add_argument("--num_bins", type=int, default=100)
-    parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--replay_pos_ratio", type=float, default=1.0)
     # replay ratio as a fraction of the batch size
     # (0.5 means there are 0.5 * batch_size replayed samples,
     # while there are batch_size new samples)
     parser.add_argument("--replay_ratio", type=float, default=1.0)
-    parser.add_argument("--model", type=str, default="tran")
+    parser.add_argument("--model", type=str, default="cmlp")
+    parser.add_argument("--dataset", type=str, default="lhcb")
     parser.add_argument("--plot", action=argparse.BooleanOptionalAction)
+    parser.add_argument(
+        "--sigmoid_attn", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--pretrained_path", type=str, default=None)
     args = parser.parse_args()
 
     models = ["mlp", "tran", "cmlp", "resnet1d", "linear",
@@ -193,37 +240,60 @@ if __name__ == "__main__":
         raise ValueError(
             f"Year {args.year} not supported. Choose from {years}")
 
+    datasets = ["lhcb", "synthetic"]
+    if args.dataset not in datasets:
+        raise ValueError(
+            f"Dataset {args.dataset} not supported. Choose from {datasets}")
+
     undo_concat = args.model in ["resnet1d", "cnn1d", "cnn2d",
                                  "tran", "cmlp"]
 
-    out_dir = Path(f"./{args.model}_inc_results_{args.year}")
+    if args.sigmoid_attn:
+        assert args.model == "tran", "Sigmoid attention only supported for Transformer model"
+
+    out_dir = Path(
+        f"./t{args.model}{'sig' if args.sigmoid_attn else ''}_inc_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
     out_dir.mkdir(exist_ok=True)
 
     with open(out_dir / "config.json", "w") as f:
         json.dump(vars(args), f)
 
-    data_file = f"formatted_dataset_{args.year}.csv"
-    data = LHCbDataset(
-        DATA_DIR / data_file,
-        # Should center and norm both row and column-wise
-        year=args.year,
-        num_bins=args.num_bins,
-        whiten=True,
-        whiten_running=True,
-        to_torch=True,
-        undo_concat=undo_concat
-    )
+    include_var_preds = args.dataset == "synthetic"
+    if args.dataset == "lhcb":
+        data_file = f"formatted_dataset_{args.year}.csv"
+        data = LHCbDataset(
+            DATA_DIR / data_file,
+            # Should center and norm both row and column-wise
+            year=args.year,
+            num_bins=args.num_bins,
+            whiten=True,
+            whiten_running=True,
+            to_torch=True,
+            undo_concat=undo_concat
+        )
+    else:
+        data = SyntheticDataset(
+            size=1000,
+            num_variables=100,
+            num_bins=100,
+            whiten=False,
+            whiten_running=True
+        )
 
-    print("*" * 10)
-    print("DATASET:")
+    print("#"*10)
+    print("DATASET STATISTICS:")
     print(f"Number of features: {data.num_features}")
     print(f"Number of classes: {data.num_classes}")
     print(f"Number of samples (train): {len(data)}")
     print(f"Number of positive samples (train): {data.num_pos}")
     print(f"Number of negative samples (train): {data.num_neg}")
-    print("*" * 10)
+    print("#"*10)
 
     total_probs, total_preds, total_labels = [], [], []
+    if include_var_preds:
+        total_var_probs, total_var_preds, total_var_labels = [], [], []
+    else:
+        total_var_probs = total_var_preds = total_var_labels = None
     for run in range(args.n_runs):
 
         print(f"RUN {run + 1}/{args.n_runs}")
@@ -232,7 +302,7 @@ if __name__ == "__main__":
             model = MLP(data.num_features)
         elif args.model == "tran":
             model = Transformer(
-                data.num_bins, data.num_features, 128)
+                data.num_bins, data.num_features, 128, sigmoid_attn=args.sigmoid_attn)
         elif args.model == "cmlp":
             model = ContextMLP(data.num_bins, data.num_features, 128)
         elif args.model == "resnet1d":
@@ -248,9 +318,15 @@ if __name__ == "__main__":
         else:
             raise ValueError(f"Model {args.model} not supported")
 
+        if args.pretrained_path and isinstance(model, ContextMLP):
+            pretrained = torch.load(args.pretrained_path)
+            model.network = pretrained.network
+            model.head = pretrained.head
+
         print(f"MODEL SIZE: {sum(p.numel() for p in model.parameters())}")
 
-        probs, preds, labels = train(model, data, args, plot=args.plot)
+        res = train(model, data, args, plot=args.plot)
+        probs, preds, labels = res["probs"], res["preds"], res["labels"]
         _, flip_preds, flip_labels = filter_flips(probs, preds, labels)
 
         print(f"BALANCED ACCURACY: {balanced_accuracy_score(labels, preds)}")
@@ -262,14 +338,18 @@ if __name__ == "__main__":
         total_preds.append(preds)
         total_labels.append(labels)
 
-    total_probs = np.array(total_probs)
-    total_preds = np.array(total_preds)
-    total_labels = np.array(total_labels)
+        if include_var_preds:
+            var_probs, var_preds, var_labels = res["var_probs"], res["var_preds"], res["var_labels"]
+            total_var_probs.append(var_probs)
+            total_var_preds.append(var_preds)
+            total_var_labels.append(var_labels)
 
     print("*" * 10)
     print("FINAL RESULTS")
     results_summary = compute_results_summary(
-        total_probs, total_preds, total_labels)
+        total_probs, total_preds, total_labels,
+        total_var_probs, total_var_preds, total_var_labels
+    )
     print(results_summary)
     print("*" * 10)
 

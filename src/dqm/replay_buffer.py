@@ -9,7 +9,7 @@ class ReplayBuffer:
         self,
         dataset: LHCbDataset,
         buffer_size: int,
-        pos_ratio: float = 0.5
+        pos_ratio: float = 1.0
     ):
 
         self.dataset = dataset

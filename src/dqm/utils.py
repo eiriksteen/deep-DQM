@@ -1,3 +1,5 @@
+import torch
+import warnings
 import numpy as np
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -8,16 +10,19 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     average_precision_score,
-    balanced_accuracy_score
+    balanced_accuracy_score,
+    roc_curve
 )
 from pathlib import Path
 
-import torch
 
-sns.set_style("white")
+sns.set_style("darkgrid")
 
 plt.rc("figure", figsize=(20, 10))
 plt.rc("font", size=13)
+
+
+warnings.filterwarnings("ignore")
 
 
 def rebin(old_hist, new_bin_count) -> np.ndarray:
@@ -52,6 +57,7 @@ def filter_flips(scores: np.ndarray,
     scores = np.array(scores)
     preds = np.array(preds)
     labels = np.array(labels)
+
     flip_idx = np.where(labels[:-1] != labels[1:])[0] + 1
     flip_scores = scores[flip_idx]
     flip_preds = preds[flip_idx]
@@ -70,7 +76,7 @@ def plot_attn_weights(
     num_samples = len(attn_weights)
     _, axes = plt.subplots(
         nrows=num_samples, ncols=2, figsize=(10, 5 * num_samples))
-    axes = np.atleast_1d(axes)
+    axes = np.atleast_2d(axes)
 
     for i, ax in enumerate(axes):
         label_value = labels[i].item()
@@ -98,11 +104,15 @@ def plot_scores(
         histogram: torch.Tensor,
         labels: torch.Tensor,
         preds: torch.Tensor,
-        save_path: Path):
+        save_path: Path,
+        reference: torch.Tensor | None = None,
+        true_scores: torch.Tensor | None = None):
 
     num_samples = len(scores)
+    ncols = 2 + (1 if reference is not None else 0) + \
+        (1 if true_scores is not None else 0)
     _, axes = plt.subplots(
-        nrows=num_samples, ncols=2, figsize=(10, 5 * num_samples))
+        nrows=num_samples, ncols=ncols, figsize=(10, 5 * num_samples))
     axes = np.atleast_2d(axes)
 
     for i, ax in enumerate(axes):
@@ -110,13 +120,16 @@ def plot_scores(
         pred_value = preds[i].item()
         top_act_idx = scores[i].argmax().item()
         hist = histogram[i, top_act_idx].detach().cpu().numpy()
+        scr = scores.detach().cpu().numpy()
+        true_scr = true_scores[i].detach().cpu().numpy(
+        ) if true_scores is not None else None
 
         color_palette = sns.color_palette("viridis", len(categories))
         bar_width = 0.6
 
         ax[0].bar(
             list(range(len(categories))),
-            scores[i].squeeze(),
+            scr.squeeze(),
             color=color_palette,
             width=bar_width,
             edgecolor='black',
@@ -126,8 +139,24 @@ def plot_scores(
         ax[0].set_xlabel("Histogram number")
         ax[0].set_ylabel("Anomaly Probability")
         ax[1].plot(hist)
-        ax[1].set_title(f"Histogram with Strongest Activation\nCategory: {
-                        categories[top_act_idx]}")
+        ax[1].set_title(f"Histogram with Strongest Activation\n{
+                        categories[top_act_idx][:10]}")
+        if true_scores is not None:
+
+            ax[2].bar(
+                range(len(categories)),
+                true_scr.squeeze().tolist(),
+                color=color_palette,
+                width=bar_width,
+                edgecolor='black',
+                linewidth=1
+            )
+            ax[2].set_title(f"True Scores\nLabel: {label_value}")
+            ax[2].set_xlabel("Histogram number")
+            ax[2].set_ylabel("Anomaly Probability")
+        if reference is not None:
+            ax[2].plot(reference[top_act_idx].detach().cpu().numpy())
+            ax[2].set_title(f"Reference Histogram")
 
     plt.tight_layout()
     plt.savefig(save_path)
@@ -136,28 +165,29 @@ def plot_scores(
 
 def compute_results_summary(total_scores: np.ndarray,
                             total_preds: np.ndarray,
-                            total_labels: np.ndarray,):
+                            total_labels: np.ndarray,
+                            total_scores_per_var: np.ndarray | None = None,
+                            total_preds_per_var: np.ndarray | None = None,
+                            total_labels_per_var: np.ndarray | None = None):
+
+    metric_names = ["accuracy", "balanced_accuracy", "precision",
+                    "recall", "f1", "auroc", "auprc"]
 
     metrics = {
         "total": {
-            "accuracy": [],
-            "balanced_accuracy": [],
-            "precision": [],
-            "recall": [],
-            "f1": [],
-            "auroc": [],
-            "auprc": []
+            metric_name: [] for metric_name in metric_names
         },
         "flips": {
-            "accuracy": [],
-            "balanced_accuracy": [],
-            "precision": [],
-            "recall": [],
-            "f1": [],
-            "auroc": [],
-            "auprc": []
+            metric_name: [] for metric_name in metric_names
         }
     }
+
+    if total_scores_per_var is not None:
+        metrics["var_classification"] = {
+            metric_name: [] for metric_name in [
+                "accuracy", "f1", "auroc", "auprc",
+                "max_accuracy", "max_f1", "max_auroc", "max_auprc"]
+        }
 
     for run in range(len(total_scores)):
         scores = total_scores[run]
@@ -192,10 +222,52 @@ def compute_results_summary(total_scores: np.ndarray,
         metrics["flips"]["auprc"].append(
             average_precision_score(flip_labels, flip_scores))
 
+        if total_scores_per_var is not None:
+
+            max_idx = np.argmax(total_scores_per_var[run], axis=-1)
+
+            max_scores = np.take_along_axis(
+                total_scores_per_var[run], max_idx[:, None], axis=-1)
+            max_preds = np.take_along_axis(
+                total_preds_per_var[run], max_idx[:, None], axis=-1)
+            max_labels = np.take_along_axis(
+                total_labels_per_var[run], max_idx[:, None], axis=-1)
+
+            metrics["var_classification"]["accuracy"].append(
+                accuracy_score(total_labels_per_var[run], total_preds_per_var[run]))
+            metrics["var_classification"]["f1"].append(
+                f1_score(total_labels_per_var[run], total_preds_per_var[run], average="macro"))
+
+            try:
+                metrics["var_classification"]["auroc"].append(
+                    roc_auc_score(total_labels_per_var[run], total_scores_per_var[run]))
+            except ValueError:
+                metrics["var_classification"]["auroc"].append(-1)
+            try:
+                metrics["var_classification"]["auprc"].append(
+                    average_precision_score(total_labels_per_var[run], total_scores_per_var[run]))
+            except ValueError:
+                metrics["var_classification"]["auprc"].append(-1)
+
+            metrics["var_classification"]["max_accuracy"].append(
+                accuracy_score(max_labels.squeeze(), max_preds.squeeze()))
+            metrics["var_classification"]["max_f1"].append(
+                f1_score(max_labels.squeeze(), max_preds.squeeze(), average="macro"))
+            try:
+                metrics["var_classification"]["max_auroc"].append(
+                    roc_auc_score(max_labels.squeeze(), max_scores.squeeze()))
+            except ValueError:
+                metrics["var_classification"]["max_auroc"].append(-1)
+            try:
+                metrics["var_classification"]["max_auprc"].append(
+                    average_precision_score(max_labels.squeeze(), max_scores.squeeze()))
+            except ValueError:
+                metrics["var_classification"]["max_auprc"].append(-1)
+
     res = []
 
-    for total_or_flips, metrics_dict in metrics.items():
-        res += [f"{total_or_flips.upper()}"]
+    for task, metrics_dict in metrics.items():
+        res += [f"{task.upper()}"]
         for metric_name, metric_values in metrics_dict.items():
             mean = np.mean(metric_values)
             std = np.std(metric_values)
@@ -213,12 +285,17 @@ def plot_metrics_per_step(
     metrics_per_step = {
         "accuracy": [[] for _ in range(len(total_scores))],
         "balanced_accuracy": [[] for _ in range(len(total_scores))],
+        "balanced_accuracy_p50": [[] for _ in range(len(total_scores))],
         "precision": [[] for _ in range(len(total_scores))],
         "recall": [[] for _ in range(len(total_scores))],
         "f1": [[] for _ in range(len(total_scores))],
         "auroc": [[] for _ in range(len(total_scores))],
         "auprc": [[] for _ in range(len(total_scores))]
     }
+
+    total_scores = np.array(total_scores)
+    total_preds = np.array(total_preds)
+    total_labels = np.array(total_labels)
 
     for run in range(len(total_scores)):
         for step in range(len(total_scores[run])):
@@ -231,6 +308,8 @@ def plot_metrics_per_step(
 
                 accuracy = accuracy_score(is_anomaly, preds)
                 balanced_accuracy = balanced_accuracy_score(is_anomaly, preds)
+                balanced_accuracy_p10 = balanced_accuracy_score(
+                    is_anomaly[-50:], preds[-50:])
                 precision = precision_score(is_anomaly, preds)
                 recall = recall_score(is_anomaly, preds)
                 f1 = f1_score(is_anomaly, preds)
@@ -240,6 +319,8 @@ def plot_metrics_per_step(
                 metrics_per_step["accuracy"][run].append(accuracy)
                 metrics_per_step["balanced_accuracy"][run].append(
                     balanced_accuracy)
+                metrics_per_step["balanced_accuracy_p50"][run].append(
+                    balanced_accuracy_p10)
                 metrics_per_step["precision"][run].append(precision)
                 metrics_per_step["recall"][run].append(recall)
                 metrics_per_step["f1"][run].append(f1)

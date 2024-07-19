@@ -1,59 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-class MLPBlock(nn.Module):
-
-    def __init__(self, in_dim: int, out_dim: int):
-        super().__init__()
-
-        self.mlp = nn.Sequential(
-            nn.Linear(in_dim, out_dim),
-            nn.ReLU(),
-            nn.Linear(out_dim, out_dim),
-            nn.Dropout(0.1)
-        )
-
-        self.rs = nn.Linear(
-            in_dim, out_dim) if in_dim != out_dim else nn.Identity()
-
-        self.norm = nn.LayerNorm(out_dim)
-
-    def forward(self, x):
-
-        return self.norm(self.mlp(x) + self.rs(x))
-
-
-class MultiHeadAttentionBlock(nn.Module):
-
-    def __init__(
-            self,
-            d,
-            num_heads=1
-    ):
-        super().__init__()
-
-        self.num_heads = num_heads
-        self.norm = nn.LayerNorm(d)
-        self.W = nn.Linear(d, 3*d)
-        self.proj = nn.Linear(d, d)
-        self.dropout = nn.Dropout(0.1)
-
-    def forward(self, x):
-
-        b, s, d = x.shape
-        q, k, v = self.W(x).chunk(3, dim=-1)
-        q, k, v = (z.reshape(b, s, self.num_heads, d//self.num_heads).transpose(1, 2)
-                   for z in (q, k, v))
-
-        attn = torch.einsum("bhqd,bhkd->bhqk", q, k) / (d**0.5)
-        attn_weights = F.softmax(attn, dim=-1)
-        attn_logits = (attn_weights @ v).reshape(b, s, d)
-        out = self.proj(attn_logits)
-        out = self.dropout(out)
-
-        return self.norm(x + out)
+from .transformer import MultiHeadAttentionBlock, MLPBlock
 
 
 class ContextMLP(nn.Module):
@@ -62,32 +10,46 @@ class ContextMLP(nn.Module):
             self,
             in_dim: int,
             in_channels: int,
-            hidden_dim: int):
+            hidden_dim: int,
+            use_ref: bool = False
+    ):
 
         super().__init__()
 
         self.in_dim = in_dim
         self.in_channels = in_channels
         self.hidden_dim = hidden_dim
+        self.use_ref = use_ref
 
         self.pos_embed = nn.Embedding(in_channels, in_dim)
-
-        self.network = nn.Sequential(
-            nn.Linear(3*in_dim, hidden_dim),
-            MLPBlock(hidden_dim, hidden_dim),
-        )
-
+        self.proj = nn.Linear((2+(1 if use_ref else 0))*in_dim, hidden_dim)
+        # self.mha = MultiHeadAttentionBlock(hidden_dim)
+        self.mlp = MLPBlock(hidden_dim)
         self.head = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x: torch.Tensor, reference: torch.Tensor):
+    def forward(self, x: torch.Tensor, ref: torch.Tensor | None = None):
 
-        ref = reference.to(x.device).repeat(x.shape[0], 1, 1)
         pw = self.pos_embed.weight.repeat(x.shape[0], 1, 1)
-        x_ = torch.cat((x, ref, pw), dim=-1)
 
-        logits = self.network(x_)
-        scores = self.head(logits)
-        out = scores.max(dim=1).values
+        # Concate the input, positional information (which physics variable),
+        # optionally reference
+        # x_ = torch.cat((x, ref, pw), dim=-1)
+        if self.use_ref:
+            ref = ref.repeat(x.shape[0], 1, 1)
+            x_ = torch.cat((x, ref, pw), dim=-1)
+        else:
+            x_ = torch.cat((x, pw), dim=-1)
+
+        logits = self.proj(x_)
+        # logits, attn_weights = self.mha(logits)
+        logits = self.mlp(logits)
+        # Compute the anomaly scores for each physics variable histogram
+        scores = self.head(logits).squeeze(-1)
+        # Output only the max, since one anomaly is enough to flag the whole input
+        # (this makes the model look for anomalies in each physics variable, not only in the whole input)
+        out = scores.max(dim=1, keepdim=True).values
+        # out = scores.mean(1)
+        # Sigmoid to get a probability distribution over anomalies per physics variable
         prob_scores = F.sigmoid(scores)
 
         return {"logits": out, "prob": prob_scores}
