@@ -17,6 +17,8 @@ from dqm.torch_datasets import SyntheticDataset
 from dqm.utils import compute_results_summary, plot_metrics_per_step
 from dqm.settings import HISTO_NBINS_DICT_2018, HISTO_NBINS_DICT_2023
 
+np.random.seed(42)
+
 
 def prepare_lhcb_data(data_path: Path):
     df = pd.read_csv(data_path, header=0)
@@ -65,15 +67,21 @@ if __name__ == "__main__":
         histo_nbins_dict = {
             f"var{i}": data.num_bins for i in range(data.num_features)}
 
-    out_dir = Path(f"chi_square_results_{args.dataset}_{
-                   args.year if args.dataset == 'lhcb' else ''}")
+        print(data)
+
+    out_dir = Path(f"chi_square_results_{args.dataset}{'_'+str(
+                   args.year) if args.dataset == 'lhcb' else ''}")
     out_dir.mkdir(exist_ok=True)
     total_scores, total_preds, total_labels = [], [], []
     for run in range(args.n_runs):
 
         print(f"RUN {run + 1}/{args.n_runs}")
-
-        alpha = 0.1075 if args.year == 2023 else 0.6769
+        if args.dataset == "synthetic":
+            alpha = 0.232
+        elif args.year == 2018:
+            alpha = 0.6769
+        else:
+            alpha = 0.640
 
         model = ChiSquareModel(
             histograms=histograms,

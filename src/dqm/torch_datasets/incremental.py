@@ -9,6 +9,9 @@ from ..utils import rebin
 from ..settings import HISTO_NBINS_DICT_2018, HISTO_NBINS_DICT_2023
 
 
+np.random.seed(42)
+
+
 class IncrementalDataset(Dataset):
 
     def __len__(self):
@@ -67,6 +70,18 @@ class IncrementalDataset(Dataset):
         neg_idx = np.where(self.labels == 0)[0].tolist()
 
         return pos_idx, neg_idx
+
+    def __str__(self) -> str:
+        out = "#"*10
+        out += "\nDATASET STATISTICS:"
+        out += f"\nNumber of features: {self.num_features}"
+        out += f"\nNumber of classes: {self.num_classes}"
+        out += f"\nNumber of samples: {self.size}"
+        out += f"\nNumber of positive samples: {self.num_pos}"
+        out += f"\nNumber of negative samples: {self.num_neg}"
+        out += "\n"+"#"*10
+
+        return out
 
 
 class LHCbDataset(IncrementalDataset):
@@ -150,6 +165,7 @@ class LHCbDataset(IncrementalDataset):
 
 
 class SyntheticDataset(IncrementalDataset):
+
     def __init__(
             self,
             size,
@@ -168,33 +184,27 @@ class SyntheticDataset(IncrementalDataset):
         self.num_classes = 2
 
         self.nominal_params = [
-            {"mu": 0.0, "sigma": 1.0},
-            {"mu": 0.0, "sigma": 2.0},
-            {"mu": 1.0, "sigma": 1.0},
-            {"mu": 1.0, "sigma": 2.0},
-            {"mu": 2.0, "sigma": 1.0},
-            {"mu": 2.0, "sigma": 2.0},
+            {"mu": 5.0, "sigma": 5.0},
+            {"mu": -5.0, "sigma": 3.0},
+            {"mu": 8.0, "sigma": 2.0},
+            {"mu": -2.0, "sigma": 1.0},
+            {"mu": -4.0, "sigma": 2.0},
         ]
 
         self.anomaly_params = [
-            {"mu": 0.0, "sigma": 3.5},
-            {"mu": 0.5, "sigma": 4.5},
-            {"mu": 1.5, "sigma": 6.0},
-            {"mu": 2.5, "sigma": 4.0},
-            {"mu": 0.0, "sigma": 5.5},
+            {"mu": -3.0, "sigma": 1.5},
+            {"mu": -0.5, "sigma": 5},
+            {"mu": 10.5, "sigma": 2.5},
+            {"mu": 2.5, "sigma": 5.5},
+            {"mu": 7.0, "sigma": 10},
         ]
 
         self.transforms = [
-            lambda x: x,
-            lambda x: x**2,
-            # lambda x: x**3,
-            lambda x: np.sin(x),
-            # lambda x: np.cos(x),
-            # lambda x: np.exp(x),
-            # lambda x: np.log(x),
-            # lambda x: np.sqrt(x),
-            lambda x: np.abs(x),
-            # lambda x: np.sin(x)*np.sin(x)
+            # lambda x: x
+            lambda x: np.sin(x)*np.log(x)**2 + x,
+            lambda x: np.log(x)*np.exp(x) - 2*x,
+            lambda x: np.sqrt(x)*np.log(x) + np.log(x),
+            lambda x: np.abs(x)*np.log(x),
         ]
 
         self.data, self.labels, self.anomaly_idx = self.generate_data(
@@ -214,10 +224,10 @@ class SyntheticDataset(IncrementalDataset):
         size,
         num_variables,
         num_bins,
-        total_nominal_fraction=0.99,
+        total_nominal_fraction,
         change_conditions_every: int = 100,
-        num_samples_per_hist_nominal: int = 1000,
-        num_samples_per_hist_anomaly: int = 1000
+        num_samples_per_hist_nominal: int = 10000,
+        num_samples_per_hist_anomaly: int = 10000
     ):
 
         nominal_p = np.random.choice(
@@ -265,12 +275,23 @@ class SyntheticDataset(IncrementalDataset):
                     ns = num_samples_per_hist_nominal
 
                 s = np.random.normal(p["mu"], p["sigma"], ns)
-                # s = np.random.normal(p["mu"], p["sigma"], num_bins)
                 transform = variable_transforms[idx]
                 s = transform(s)
-                hist = np.histogram(s, bins=num_bins, density=True)[0]
+                hist, _ = np.histogram(
+                    s,
+                    bins=num_bins,
+                    density=False,
+                    range=(-15, 15)
+                )
+
+                # if num_samples_per_hist_anomaly != num_samples_per_hist_nominal:
+
+                #     hist = self.subsample_histogram(
+                #         hist, min(num_samples_per_hist_nominal,
+                #                   num_samples_per_hist_anomaly), is_anomaly, idx
+                #     )
+
                 sample.append(hist)
-                # sample.append(s)
 
             data.append(sample)
             labels.append(label)
@@ -278,6 +299,19 @@ class SyntheticDataset(IncrementalDataset):
             prev_is_anomaly = is_anomaly
 
         return np.array(data), np.array(labels), np.array(anomaly_idx)
+
+    def subsample_histogram(self, histogram: np.ndarray, num_samples: int, label, idx) -> np.ndarray:
+
+        _, ax = plt.subplots(ncols=2)
+        histogram_norm = histogram / histogram.sum()
+        subsample = np.random.multinomial(num_samples, histogram_norm)
+        if idx == 0:
+            plt.title(f"Is anomaly is {label}")
+            ax[0].plot(histogram)
+            ax[1].plot(subsample)
+            plt.show()
+
+        return subsample
 
     def get_histogram_names(self) -> list[str]:
         return [f"var_{i}" for i in range(self.num_features)]

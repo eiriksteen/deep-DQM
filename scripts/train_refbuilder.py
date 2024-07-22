@@ -20,9 +20,10 @@ from sklearn.metrics import (
 from dqm.deep_models import (
     RefBuilder,
     RefClassifier,
-    ContextMLP
+    ContextMLP,
+    Transformer
 )
-from dqm.torch_datasets import LHCbDataset
+from dqm.torch_datasets import LHCbDataset, SyntheticDataset
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
@@ -33,7 +34,8 @@ from dqm.utils import (
 )
 
 
-torch.manual_seed(0)
+np.random.seed(42)
+torch.manual_seed(42)
 
 
 def train(
@@ -184,11 +186,12 @@ if __name__ == "__main__":
     parser.add_argument("--year", type=int, default=2018)
     parser.add_argument("--steps_per_batch", type=int, default=2)
     parser.add_argument("--num_bins", type=int, default=100)
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--replay_pos_ratio", type=float, default=1.0)
     parser.add_argument("--model", type=str, default="refcls")
+    parser.add_argument("--dataset", type=str, default="lhcb")
     # replay ratio as a fraction of the batch size
     # (0.5 means there are 0.5 * batch_size replayed samples,
     # while there are batch_size new samples)
@@ -201,28 +204,38 @@ if __name__ == "__main__":
         raise ValueError(
             f"Year {args.year} not supported. Choose from {years}")
 
-    models = ["refcls", "cmlp"]
+    models = ["tran", "cmlp", "refcls"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
 
-    out_dir = Path(f"./refbuilder_results_{args.model}_{args.year}")
+    out_dir = Path(
+        f"./{args.model}refb_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
     out_dir.mkdir(exist_ok=True)
 
     with open(out_dir / "config.json", "w") as f:
         json.dump(vars(args), f)
 
-    data_file = f"formatted_dataset_{args.year}.csv"
-    data = LHCbDataset(
-        DATA_DIR / data_file,
-        # Should center and norm both row and column-wise
-        year=args.year,
-        num_bins=args.num_bins,
-        whiten=True,
-        whiten_running=True,
-        to_torch=True,
-        undo_concat=True
-    )
+    if args.dataset == "lhcb":
+        data_file = f"formatted_dataset_{args.year}.csv"
+        data = LHCbDataset(
+            DATA_DIR / data_file,
+            # Should center and norm both row and column-wise
+            year=args.year,
+            num_bins=args.num_bins,
+            whiten=True,
+            whiten_running=True,
+            to_torch=True,
+            undo_concat=True
+        )
+    else:
+        data = SyntheticDataset(
+            size=1000,
+            num_variables=100,
+            num_bins=100,
+            whiten=True,
+            whiten_running=True
+        )
 
     print("*" * 10)
     print("DATASET:")
@@ -243,6 +256,9 @@ if __name__ == "__main__":
         elif args.model == "cmlp":
             model = ContextMLP(
                 data.num_bins, data.num_features, 128, use_ref=True)
+        elif args.model == "tran":
+            model = Transformer(
+                data.num_bins, data.num_features, 128, sigmoid_attn=False, use_ref=True)
         else:
             raise ValueError("Model not supported")
 

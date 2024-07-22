@@ -75,8 +75,6 @@ def train(
     loss_total = 0
     optimal_thresh = 0.5
 
-    c = 0
-    t = 0
     for batch_num, sample in enumerate(tqdm(loader)):
 
         model.eval()
@@ -115,10 +113,10 @@ def train(
                     total_var_probs += var_probs.detach().squeeze(-1).cpu().tolist()
                     total_var_preds += var_preds.detach().squeeze(-1).cpu().tolist()
 
-            # if batch_num % thresh_every == 0:
-            #     if 0 in total_labels and 1 in total_labels:
-            #         fpr, tpr, thresholds = roc_curve(total_labels, total_probs)
-            #         optimal_thresh = thresholds[np.argmax(tpr - fpr)]
+            if batch_num % thresh_every == 0:
+                if 0 in total_labels and 1 in total_labels:
+                    fpr, tpr, thresholds = roc_curve(total_labels, total_probs)
+                    optimal_thresh = thresholds[np.argmax(tpr - fpr)]
 
         if requires_grad:
 
@@ -143,6 +141,8 @@ def train(
 
         if plot and batch_num > 0:
 
+            categories = data.get_histogram_names()
+
             if "attn_weights" in out.keys():
                 attn_weight_dir = out_dir / "attention_weights"
                 attn_weight_dir.mkdir(exist_ok=True)
@@ -151,13 +151,13 @@ def train(
 
                 if preds.count_nonzero():
                     plot_attn_weights(attn_weights, histogram, is_anomaly,
-                                      preds, attn_weight_dir / f"{batch_num}.png")
+                                      preds, attn_weight_dir /
+                                      f"{batch_num}.png",
+                                      categories, var_labels if include_var_preds else None)
 
             if "prob" in out.keys():
                 scores_dir = out_dir / "probs"
                 scores_dir.mkdir(exist_ok=True)
-
-                categories = data.get_histogram_names()
 
                 if preds.count_nonzero():
                     plot_scores(out["prob"], categories, histogram, is_anomaly,
@@ -252,13 +252,14 @@ if __name__ == "__main__":
         assert args.model == "tran", "Sigmoid attention only supported for Transformer model"
 
     out_dir = Path(
-        f"./t{args.model}{'sig' if args.sigmoid_attn else ''}_inc_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
+        f"./{args.model}{'sig' if args.sigmoid_attn else ''}_inc_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
     out_dir.mkdir(exist_ok=True)
 
     with open(out_dir / "config.json", "w") as f:
         json.dump(vars(args), f)
 
     include_var_preds = args.dataset == "synthetic"
+
     if args.dataset == "lhcb":
         data_file = f"formatted_dataset_{args.year}.csv"
         data = LHCbDataset(
@@ -276,18 +277,11 @@ if __name__ == "__main__":
             size=1000,
             num_variables=100,
             num_bins=100,
-            whiten=False,
+            whiten=True,
             whiten_running=True
         )
 
-    print("#"*10)
-    print("DATASET STATISTICS:")
-    print(f"Number of features: {data.num_features}")
-    print(f"Number of classes: {data.num_classes}")
-    print(f"Number of samples (train): {len(data)}")
-    print(f"Number of positive samples (train): {data.num_pos}")
-    print(f"Number of negative samples (train): {data.num_neg}")
-    print("#"*10)
+    print(data)
 
     total_probs, total_preds, total_labels = [], [], []
     if include_var_preds:

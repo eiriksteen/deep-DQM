@@ -36,10 +36,10 @@ class RefBuilder(nn.Module):
             x: torch.Tensor,
             labels: torch.Tensor,
             reference:
-            torch.Tensor, alpha: torch.Tensor):
+            torch.Tensor,
+            alpha: torch.Tensor):
 
-        neg_idx = (labels == 0).squeeze(-1)
-        x_neg = x[neg_idx]
+        x_neg = x[(labels == 0).squeeze(-1)]
 
         for i, x_ in enumerate(x_neg):
             alpha_ = alpha[i]

@@ -10,8 +10,7 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
     average_precision_score,
-    balanced_accuracy_score,
-    roc_curve
+    balanced_accuracy_score
 )
 from pathlib import Path
 
@@ -71,18 +70,26 @@ def plot_attn_weights(
         histogram: torch.Tensor,
         labels: torch.Tensor,
         preds: torch.Tensor,
-        save_path: Path):
+        save_path: Path,
+        categories: list,
+        true_scores: torch.Tensor | None = None
+):
 
     num_samples = len(attn_weights)
+    ncols = 2 + (1 if true_scores is not None else 0)
     _, axes = plt.subplots(
-        nrows=num_samples, ncols=2, figsize=(10, 5 * num_samples))
+        nrows=num_samples, ncols=ncols, figsize=(10, 5 * num_samples))
     axes = np.atleast_2d(axes)
+    color_palette = sns.color_palette("viridis", len(categories))
+    bar_width = 0.6
 
     for i, ax in enumerate(axes):
         label_value = labels[i].item()
         pred_value = preds[i].item()
         top_act_idx = attn_weights[i].mean(0).argmax().item()
         hist = histogram[i, top_act_idx].detach().cpu().numpy()
+        true_scr = true_scores[i].detach().cpu().numpy(
+        ) if true_scores is not None else None
 
         sns.heatmap(attn_weights[i], ax=ax[0],
                     cmap="YlGnBu", cbar=True)
@@ -91,7 +98,22 @@ def plot_attn_weights(
         ax[0].set_xlabel("Target")
         ax[0].set_ylabel("Source")
         ax[1].plot(hist)
-        ax[1].set_title(f"Histogram with Strongest Activation")
+        ax[1].set_title(f"Histogram with Strongest Activation\n{
+            categories[top_act_idx][:10]}")
+
+        if true_scores is not None:
+
+            ax[2].bar(
+                range(len(categories)),
+                true_scr.squeeze().tolist(),
+                color=color_palette,
+                width=bar_width,
+                edgecolor='black',
+                linewidth=1
+            )
+            ax[2].set_title(f"True Scores\nLabel: {label_value}")
+            ax[2].set_xlabel("Histogram number")
+            ax[2].set_ylabel("Anomaly Probability")
 
     plt.tight_layout()
     plt.savefig(save_path)
