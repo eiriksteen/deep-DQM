@@ -274,7 +274,7 @@ if __name__ == "__main__":
         )
     else:
         data = SyntheticDataset(
-            size=1000,
+            size=500,
             num_variables=100,
             num_bins=100,
             whiten=True,

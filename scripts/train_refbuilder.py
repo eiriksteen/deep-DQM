@@ -230,7 +230,7 @@ if __name__ == "__main__":
         )
     else:
         data = SyntheticDataset(
-            size=1000,
+            size=500,
             num_variables=100,
             num_bins=100,
             whiten=True,
@@ -258,7 +258,11 @@ if __name__ == "__main__":
                 data.num_bins, data.num_features, 128, use_ref=True)
         elif args.model == "tran":
             model = Transformer(
-                data.num_bins, data.num_features, 128, sigmoid_attn=False, use_ref=True)
+                data.num_bins,
+                data.num_features,
+                128,
+                sigmoid_attn=False,
+                use_ref=True)
         else:
             raise ValueError("Model not supported")
 

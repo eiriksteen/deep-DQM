@@ -9,21 +9,37 @@ class MultiHeadAttentionBlock(nn.Module):
             self,
             d,
             num_heads=4,
-            sigmoid: bool = False
+            sigmoid: bool = False,
+            cross: bool = False
     ):
         super().__init__()
 
         self.num_heads = num_heads
         self.sigmoid = sigmoid
-        self.norm = nn.LayerNorm(d)
-        self.W = nn.Linear(d, 3*d)
+        self.cross = cross
+
+        if cross:
+            self.W = nn.Linear(d, 2*d)
+            self.Wc = nn.Linear(d, d)
+        else:
+            self.W = nn.Linear(d, 3*d)
+
         self.proj = nn.Linear(d, d)
         self.dropout = nn.Dropout(0.2)
+        self.norm = nn.LayerNorm(d)
 
-    def forward(self, x):
+    def forward(self, x, c=None):
 
         b, s, d = x.shape
-        q, k, v = self.W(x).chunk(3, dim=-1)
+
+        assert (c is not None) == self.cross
+
+        if self.cross:
+            q = self.Wc(c).unsqueeze(0).repeat(b, 1, 1)
+            k, v = self.W(x).chunk(2, dim=-1)
+        else:
+            q, k, v = self.W(x).chunk(3, dim=-1)
+
         q, k, v = (z.reshape(b, s, self.num_heads, d//self.num_heads).transpose(1, 2)
                    for z in (q, k, v))
 
@@ -105,16 +121,14 @@ class Transformer(nn.Module):
 
     def forward(self, x, ref: torch.Tensor | None = None):
 
-        pe = self.pos_embed.weight.repeat(x.shape[0], 1, 1)
-        x_ = x + pe  # torch.cat((x, pe), dim=-1)
-        embeddings = self.embed(x_)
+        x_ = x + self.pos_embed.weight
+        x_latents = self.embed(x_)
 
         if self.use_ref:
-            ref = ref.repeat(x.shape[0], 1, 1)
             c = self.change_detector((x - ref)**2)
-            embeddings += c
+            x_latents += c
 
-        attn_logits, attn_weights = self.mha(embeddings)
+        attn_logits, attn_weights = self.mha(x_latents)
         logits = self.mlp(attn_logits)
         out = self.head(logits.mean(dim=1))
         scores = attn_weights.mean(dim=1).mean(dim=1)

@@ -26,7 +26,7 @@ class RefBuilder(nn.Module):
         ref = reference.to(x.device).repeat(x.shape[0], 1, 1)
         pw = self.pos_embed.weight.repeat(x.shape[0], 1, 1)
         x_ = torch.cat((x, ref, pw), dim=-1)
-        logits = self.mlp(x_).mean(1)
+        logits = self.mlp(x_).mean(dim=1)
         alpha = F.sigmoid(logits)
 
         return alpha
@@ -35,8 +35,7 @@ class RefBuilder(nn.Module):
             self,
             x: torch.Tensor,
             labels: torch.Tensor,
-            reference:
-            torch.Tensor,
+            reference: torch.Tensor,
             alpha: torch.Tensor):
 
         x_neg = x[(labels == 0).squeeze(-1)]
