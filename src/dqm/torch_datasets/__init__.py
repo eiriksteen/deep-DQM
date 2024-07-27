@@ -1,1 +1,1 @@
-from .incremental import LHCbDataset, SyntheticDataset
+from .sequential import LHCbDataset, SyntheticDataset, SequentialDataset

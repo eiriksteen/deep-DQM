@@ -1,3 +1,4 @@
+from matplotlib.lines import Line2D
 import pandas as pd
 import argparse
 from pathlib import Path
@@ -33,9 +34,12 @@ def prepare_lhcb_data(data_path: Path):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_runs", type=int, default=5)
+    parser.add_argument("--n_runs", type=int, default=1)
     parser.add_argument("--dataset", type=str, default="lhcb")
     parser.add_argument("--year", type=int, default=2018)
+    parser.add_argument("--warmup_frac", type=float, default=0.2)
+    parser.add_argument("optimise_hyperparameters",
+                        action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
     if args.year not in [2018, 2023]:
@@ -57,7 +61,7 @@ if __name__ == "__main__":
     else:
         data = SyntheticDataset(
             size=500,
-            num_variables=100,
+            num_variables=50,
             num_bins=100,
             whiten=False,
             whiten_running=False
@@ -69,6 +73,9 @@ if __name__ == "__main__":
 
         print(data)
 
+    if args.warmup_frac > 0:
+        start_idx = int(args.warmup_frac * len(histograms))
+
     out_dir = Path(f"chi_square_results_{args.dataset}{'_'+str(
                    args.year) if args.dataset == 'lhcb' else ''}")
     out_dir.mkdir(exist_ok=True)
@@ -77,21 +84,23 @@ if __name__ == "__main__":
 
         print(f"RUN {run + 1}/{args.n_runs}")
         if args.dataset == "synthetic":
-            alpha = 0.232
+            alpha = 0.355389  # 0.11351591384976992
         elif args.year == 2018:
-            alpha = 0.6769
+            alpha = 0.529
         else:
-            alpha = 0.640
+            alpha = 0.02885998
 
         model = ChiSquareModel(
             histograms=histograms,
             is_anomaly=is_anomaly,
             histo_nbins_dict=histo_nbins_dict,
             alpha=alpha,
-            optimise_hyperparameters=False
+            optimise_hyperparameters=args.optimise_hyperparameters
         )
 
         scores, preds, labels = model.fit()
+        scores, preds, labels = (z[start_idx:]
+                                 for z in (scores, preds, labels))
 
         np.save(out_dir / "scores.npy", scores)
         np.save(out_dir / "preds.npy", preds)
@@ -119,18 +128,55 @@ if __name__ == "__main__":
         plt.savefig(out_dir / "precision_recall_curve.png")
         plt.close()
 
+        optimal_threshold = 0
+
+        colors = ["green" if l == 0 else "red" for l in labels]
+
+        start_idx = int(args.warmup_frac * len(histograms))
+
+        plt.scatter(range(len(scores)), scores, c=colors, alpha=0.6)
+        tline = plt.axhline(y=optimal_threshold, color="blue", linestyle="--",
+                            label=f"Threshold: {optimal_threshold:.2f}")
+        wline = plt.axvline(x=start_idx, color="orange",
+                            linestyle="--", label="Warmup End")
+
+        legend_elements = [
+            Line2D([0], [0], marker="o", color="w", label="Nominal",
+                   markerfacecolor="green", markersize=10),
+            Line2D([0], [0], marker="o", color="w", label="Anomaly",
+                   markerfacecolor="red", markersize=10)
+        ]
+
+        # Add the line objects directly, no need for additional Line2D objects
+        legend_elements += [tline, wline]
+
+        plt.title("Score Scatter Plot with Optimal Threshold")
+        plt.xlabel("Sample Index")
+        plt.ylabel("Score")
+        plt.ylim(min(scores), max(scores))
+
+        # Only call legend once, with all the elements
+        plt.legend(handles=legend_elements, loc='best')
+
+        plt.tight_layout()
+        plt.savefig(out_dir / "score_scatter.png")
+        plt.close()
+
     total_scores = np.array(total_scores)
-    total_preds = np.array(total_preds)
     total_labels = np.array(total_labels)
 
     print("*" * 10)
     print("FINAL RESULTS")
+
     results_summary = compute_results_summary(
-        total_scores, total_preds, total_labels)
+        total_scores,
+        total_labels
+    )
+
     print(results_summary)
     print("*" * 10)
 
     with open(out_dir / "results.txt", "w") as f:
         f.write(results_summary)
 
-    plot_metrics_per_step(total_scores, total_preds, total_labels, out_dir)
+    # plot_metrics_per_step(total_scores, total_preds, total_labels, out_dir)

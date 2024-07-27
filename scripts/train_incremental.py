@@ -35,7 +35,7 @@ from dqm.utils import (
     plot_metrics_per_step,
     plot_attn_weights,
     plot_scores,
-    filter_flips
+    compute_flip_idx
 )
 
 
@@ -267,8 +267,8 @@ if __name__ == "__main__":
             # Should center and norm both row and column-wise
             year=args.year,
             num_bins=args.num_bins,
-            whiten=True,
-            whiten_running=True,
+            whiten=False,
+            whiten_running=False,
             to_torch=True,
             undo_concat=undo_concat
         )
@@ -277,8 +277,8 @@ if __name__ == "__main__":
             size=500,
             num_variables=100,
             num_bins=100,
-            whiten=True,
-            whiten_running=True
+            whiten=False,
+            whiten_running=False
         )
 
     print(data)
@@ -321,7 +321,7 @@ if __name__ == "__main__":
 
         res = train(model, data, args, plot=args.plot)
         probs, preds, labels = res["probs"], res["preds"], res["labels"]
-        _, flip_preds, flip_labels = filter_flips(probs, preds, labels)
+        _, flip_preds, flip_labels = compute_flip_idx(probs, preds, labels)
 
         print(f"BALANCED ACCURACY: {balanced_accuracy_score(labels, preds)}")
         print(f"ACCURACY FLIPS: {accuracy_score(flip_labels, flip_preds)}")

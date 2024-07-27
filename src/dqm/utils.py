@@ -1,3 +1,4 @@
+from sklearn.metrics import balanced_accuracy_score
 import torch
 import warnings
 import numpy as np
@@ -49,27 +50,16 @@ def rebin(old_hist, new_bin_count) -> np.ndarray:
     return new_hist
 
 
-def filter_flips(scores: np.ndarray,
-                 preds: np.ndarray,
-                 labels: np.ndarray):
+def compute_flip_idx(labels: np.ndarray):
 
-    scores = np.array(scores)
-    preds = np.array(preds)
-    labels = np.array(labels)
-
-    flip_idx = np.where(labels[:-1] != labels[1:])[0] + 1
-    flip_scores = scores[flip_idx]
-    flip_preds = preds[flip_idx]
-    flip_labels = labels[flip_idx]
-
-    return flip_scores, flip_preds, flip_labels
+    return np.where(labels[:-1] != labels[1:])[0] + 1
 
 
 def plot_attn_weights(
         attn_weights: torch.Tensor,
         histogram: torch.Tensor,
         labels: torch.Tensor,
-        preds: torch.Tensor,
+        scores: torch.Tensor,
         save_path: Path,
         categories: list,
         true_scores: torch.Tensor | None = None
@@ -85,7 +75,7 @@ def plot_attn_weights(
 
     for i, ax in enumerate(axes):
         label_value = labels[i].item()
-        pred_value = preds[i].item()
+        score_value = scores[i].item()
         top_act_idx = attn_weights[i].mean(0).argmax().item()
         hist = histogram[i, top_act_idx].detach().cpu().numpy()
         true_scr = true_scores[i].detach().cpu().numpy(
@@ -94,7 +84,7 @@ def plot_attn_weights(
         sns.heatmap(attn_weights[i], ax=ax[0],
                     cmap="YlGnBu", cbar=True)
         ax[0].set_title(f"Attention Weights\nLabel: {
-                        label_value}, Pred: {pred_value}")
+                        label_value}, Pred: {score_value}")
         ax[0].set_xlabel("Target")
         ax[0].set_ylabel("Source")
         ax[1].plot(hist)
@@ -125,7 +115,6 @@ def plot_scores(
         categories: list,
         histogram: torch.Tensor,
         labels: torch.Tensor,
-        preds: torch.Tensor,
         save_path: Path,
         reference: torch.Tensor | None = None,
         true_scores: torch.Tensor | None = None):
@@ -139,7 +128,7 @@ def plot_scores(
 
     for i, ax in enumerate(axes):
         label_value = labels[i].item()
-        pred_value = preds[i].item()
+        score_value = scores[i].item()
         top_act_idx = scores[i].argmax().item()
         hist = histogram[i, top_act_idx].detach().cpu().numpy()
         scr = scores.detach().cpu().numpy()
@@ -157,7 +146,7 @@ def plot_scores(
             edgecolor='black',
             linewidth=1
         )
-        ax[0].set_title(f"Scores\nLabel: {label_value}, Pred: {pred_value}")
+        ax[0].set_title(f"Scores\nLabel: {label_value}, Score: {score_value}")
         ax[0].set_xlabel("Histogram number")
         ax[0].set_ylabel("Anomaly Probability")
         ax[1].plot(hist)
@@ -185,122 +174,108 @@ def plot_scores(
     plt.close()
 
 
-def compute_results_summary(total_scores: np.ndarray,
-                            total_preds: np.ndarray,
-                            total_labels: np.ndarray,
-                            total_scores_per_var: np.ndarray | None = None,
-                            total_preds_per_var: np.ndarray | None = None,
-                            total_labels_per_var: np.ndarray | None = None):
+def optimal_balanced_accuracy(scores, labels):
 
-    metric_names = ["accuracy", "balanced_accuracy", "precision",
-                    "recall", "f1", "auroc", "auprc"]
+    scores = np.array(scores)
+    labels = np.array(labels)
+
+    thresholds = np.linspace(scores.min(), scores.max(), 1000)
+
+    predictions = (scores[:, np.newaxis] >= thresholds).astype(int)
+
+    balanced_accuracies = np.array(
+        [balanced_accuracy_score(labels, pred) for pred in predictions.T])
+
+    best_threshold_index = np.argmax(balanced_accuracies)
+    best_threshold = thresholds[best_threshold_index]
+    highest_balanced_accuracy = balanced_accuracies[best_threshold_index]
+
+    return best_threshold, highest_balanced_accuracy
+
+
+def compute_metrics(
+        scores: np.ndarray,
+        preds: np.ndarray,
+        labels: np.ndarray,
+):
 
     metrics = {
-        "total": {
-            metric_name: [] for metric_name in metric_names
-        },
-        "flips": {
-            metric_name: [] for metric_name in metric_names
-        }
+        "accuracy": accuracy_score(labels, preds),
+        "balanced_accuracy": balanced_accuracy_score(labels, preds),
+        "precision": precision_score(labels, preds),
+        "recall": recall_score(labels, preds),
+        "f1": f1_score(labels, preds),
+        "auroc": roc_auc_score(labels, scores),
+        "auprc": average_precision_score(labels, scores)
     }
 
-    if total_scores_per_var is not None:
-        metrics["var_classification"] = {
-            metric_name: [] for metric_name in [
-                "accuracy", "f1", "auroc", "auprc",
-                "max_accuracy", "max_f1", "max_auroc", "max_auprc"]
-        }
+    return metrics
+
+
+def compute_results_summary(total_scores: np.ndarray,
+                            total_labels: np.ndarray,
+                            total_scores_per_var: np.ndarray | None = None,
+                            total_labels_per_var: np.ndarray | None = None):
+
+    all_metrics_standard = []
+    all_metrics_flips = []
 
     for run in range(len(total_scores)):
+
         scores = total_scores[run]
-        preds = total_preds[run]
         is_anomaly = total_labels[run]
+        threshold, _ = optimal_balanced_accuracy(scores, is_anomaly)
+        preds = (scores >= threshold).astype(int)
 
-        metrics["total"]["accuracy"].append(accuracy_score(is_anomaly, preds))
-        metrics["total"]["balanced_accuracy"].append(
-            balanced_accuracy_score(is_anomaly, preds))
-        metrics["total"]["precision"].append(
-            precision_score(is_anomaly, preds))
-        metrics["total"]["recall"].append(recall_score(is_anomaly, preds))
-        metrics["total"]["f1"].append(f1_score(is_anomaly, preds))
-        metrics["total"]["auroc"].append(roc_auc_score(is_anomaly, scores))
-        metrics["total"]["auprc"].append(
-            average_precision_score(is_anomaly, scores))
+        all_metrics_standard.append(compute_metrics(
+            scores,
+            preds,
+            is_anomaly))
 
-        flip_scores, flip_preds, flip_labels = filter_flips(
-            scores, preds, is_anomaly)
+        flip_idx = compute_flip_idx(is_anomaly)
+        flip_scores, flip_labels, flip_preds = [
+            z[flip_idx] for z in [scores, is_anomaly, preds]]
 
-        metrics["flips"]["accuracy"].append(
-            accuracy_score(flip_labels, flip_preds))
-        metrics["flips"]["balanced_accuracy"].append(
-            balanced_accuracy_score(flip_labels, flip_preds))
-        metrics["flips"]["precision"].append(
-            precision_score(flip_labels, flip_preds))
-        metrics["flips"]["recall"].append(
-            recall_score(flip_labels, flip_preds))
-        metrics["flips"]["f1"].append(f1_score(flip_labels, flip_preds))
-        metrics["flips"]["auroc"].append(
-            roc_auc_score(flip_labels, flip_scores))
-        metrics["flips"]["auprc"].append(
-            average_precision_score(flip_labels, flip_scores))
+        all_metrics_flips.append(compute_metrics(
+            flip_scores,
+            flip_preds,
+            flip_labels)
+        )
 
-        if total_scores_per_var is not None:
+    metrics_standard_dict = {key: [d[key] for d in all_metrics_standard]
+                             for key in all_metrics_standard[0]}
+    metrics_flips_dict = {key: [d[key] for d in all_metrics_flips]
+                          for key in all_metrics_flips[0]}
 
-            max_idx = np.argmax(total_scores_per_var[run], axis=-1)
+    results_standard = {}
+    for metric, values in metrics_standard_dict.items():
+        results_standard[metric] = {
+            "mean": np.mean(values),
+            "std": np.std(values)
+        }
 
-            max_scores = np.take_along_axis(
-                total_scores_per_var[run], max_idx[:, None], axis=-1)
-            max_preds = np.take_along_axis(
-                total_preds_per_var[run], max_idx[:, None], axis=-1)
-            max_labels = np.take_along_axis(
-                total_labels_per_var[run], max_idx[:, None], axis=-1)
+    results_flips = {}
+    for metric, values in metrics_flips_dict.items():
+        results_flips[metric] = {
+            "mean": np.mean(values),
+            "std": np.std(values)
+        }
 
-            metrics["var_classification"]["accuracy"].append(
-                accuracy_score(total_labels_per_var[run], total_preds_per_var[run]))
-            metrics["var_classification"]["f1"].append(
-                f1_score(total_labels_per_var[run], total_preds_per_var[run], average="macro"))
+    res = ["Metrics Overall:"]
+    for metric, stats in results_standard.items():
+        res.append(f"     {metric} = {
+                   stats['mean']:.4f} +- {stats['std']:.4f}")
 
-            try:
-                metrics["var_classification"]["auroc"].append(
-                    roc_auc_score(total_labels_per_var[run], total_scores_per_var[run]))
-            except ValueError:
-                metrics["var_classification"]["auroc"].append(-1)
-            try:
-                metrics["var_classification"]["auprc"].append(
-                    average_precision_score(total_labels_per_var[run], total_scores_per_var[run]))
-            except ValueError:
-                metrics["var_classification"]["auprc"].append(-1)
-
-            metrics["var_classification"]["max_accuracy"].append(
-                accuracy_score(max_labels.squeeze(), max_preds.squeeze()))
-            metrics["var_classification"]["max_f1"].append(
-                f1_score(max_labels.squeeze(), max_preds.squeeze(), average="macro"))
-            try:
-                metrics["var_classification"]["max_auroc"].append(
-                    roc_auc_score(max_labels.squeeze(), max_scores.squeeze()))
-            except ValueError:
-                metrics["var_classification"]["max_auroc"].append(-1)
-            try:
-                metrics["var_classification"]["max_auprc"].append(
-                    average_precision_score(max_labels.squeeze(), max_scores.squeeze()))
-            except ValueError:
-                metrics["var_classification"]["max_auprc"].append(-1)
-
-    res = []
-
-    for task, metrics_dict in metrics.items():
-        res += [f"{task.upper()}"]
-        for metric_name, metric_values in metrics_dict.items():
-            mean = np.mean(metric_values)
-            std = np.std(metric_values)
-            res.append(f"{' '*5}{metric_name} = {mean:.3f} +- {std:.3f}")
+    res.append("Metrics Flips:")
+    for metric, stats in results_flips.items():
+        res.append(f"     {metric} = {
+                   stats['mean']:.4f} +- {stats['std']:.4f}")
 
     return "\n".join(res)
 
 
 def plot_metrics_per_step(
         total_scores: np.ndarray,
-        total_preds: np.ndarray,
         total_labels: np.ndarray,
         out_dir: Path):
 
