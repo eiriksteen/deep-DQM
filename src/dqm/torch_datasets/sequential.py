@@ -1,4 +1,3 @@
-from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -53,22 +52,9 @@ class SequentialDataset(Dataset):
         histogram = self.data[idx]
         is_anomaly = self.labels[idx]
 
-        # histogram = np.log1p(histogram)
-        # min = histogram.min()
-        # max = histogram.max()
-        # histogram = (histogram - min) / (max - min + 1e-06)
-
-        # histogram = histogram / (histogram.sum(-1, keepdims=True) + 1e-06)
-
-        # mean center histogram
         mu = histogram.mean()
         std = histogram.std()
         histogram = (histogram - mu) / (std + 1e-06)
-
-        # # min max norm
-        # min = histogram.min()
-        # max = histogram.max()
-        # histogram = (histogram - min) / (max - min + 1e-06)
 
         if self.to_torch:
             histogram = torch.tensor(histogram).float()
@@ -172,7 +158,9 @@ class LHCbDataset(SequentialDataset):
                 # Should parallelize this
                 for b in range(len(self.data)):
                     rebinned_data[b, bin_num] = rebin(
-                        bin[b], new_bin_count=self.num_bins)
+                        bin[b],
+                        new_bin_count=self.num_bins
+                    )
 
             elif size < self.num_bins:
                 padding = np.zeros((len(self.data), self.num_bins - size))
@@ -219,11 +207,11 @@ class SyntheticDataset(SequentialDataset):
             {"mu": -0.5, "sigma": 5},
             {"mu": 0.5, "sigma": 2.5},
             {"mu": 2.5, "sigma": 5.5},
-            {"mu": 2.5, "sigma": 10},
+            {"mu": 2.5, "sigma": 2.0},
         ]
 
         self.transforms = [
-            # lambda x: x
+            lambda x: x,
             lambda x: np.sin(x)*np.log(x)**2,
             lambda x: np.log(x)*np.exp(x),
             lambda x: np.sqrt(x)*np.log(x) + np.log(x),
@@ -256,14 +244,6 @@ class SyntheticDataset(SequentialDataset):
         num_samples_per_hist_anomaly: int = 10000
     ):
 
-        nominal_p = np.random.choice(
-            self.nominal_params,
-            size=size//change_conditions_every,
-            replace=True).tolist()
-        anomaly_p = np.random.choice(
-            self.anomaly_params,
-            size=size//change_conditions_every,
-            replace=True).tolist()
         variable_transforms = np.random.choice(
             self.transforms,
             size=num_variables,
@@ -279,8 +259,10 @@ class SyntheticDataset(SequentialDataset):
                 is_anomaly = not np.random.rand() < total_nominal_fraction
 
             if i % change_conditions_every == 0:
-                cur_np = nominal_p.pop()
-                cur_ap = anomaly_p.pop()
+                cur_np = [np.random.choice(self.nominal_params)
+                          for _ in range(num_variables)]
+                cur_ap = [np.random.choice(self.anomaly_params)
+                          for _ in range(num_variables)]
 
             a_idx_one_hot = np.zeros(num_variables)
             if is_anomaly:
@@ -290,6 +272,7 @@ class SyntheticDataset(SequentialDataset):
                         num_variables, np.random.randint(1, num_variables//2))
                 else:
                     a_idx = [0]
+
                 a_idx_one_hot[a_idx] = 1
             else:
                 label = 0
@@ -297,10 +280,10 @@ class SyntheticDataset(SequentialDataset):
             sample = []
             for idx in range(num_variables):
                 if is_anomaly and idx in a_idx:
-                    p = cur_ap
+                    p = cur_ap[idx]
                     ns = num_samples_per_hist_anomaly
                 else:
-                    p = cur_np
+                    p = cur_np[idx]
                     ns = num_samples_per_hist_nominal
 
                 s = np.random.normal(p["mu"], p["sigma"], ns)

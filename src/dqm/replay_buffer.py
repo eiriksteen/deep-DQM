@@ -8,29 +8,32 @@ class ReplayBuffer:
     def __init__(
             self,
             dataset: LHCbDataset,
-            store_ref: bool = True,
+            k_past: int = 0,
             classes: str = "both"
     ):
 
         self.dataset = dataset
-        self.store_ref = store_ref
+        self.k_past = k_past
         self.classes = classes
         self.cur_idx = 0
         self.pos_idx, self.neg_idx = self.dataset.get_pos_neg_idx()
-        self.refs = [] if store_ref else None
 
         if classes not in ["both", "pos", "neg"]:
             raise ValueError(
                 "Invalid value for classes. Must be one of 'both', 'pos', 'neg'"
             )
 
-    def get_rand_past_samples(self, num_neg_to_sample: int, num_pos_to_sample: int):
+    def get_rand_past_samples(
+        self,
+        num_neg_to_sample: int,
+        num_pos_to_sample: int
+    ):
 
         cur_idx_neg = self.neg_idx[:np.searchsorted(
             self.neg_idx, self.cur_idx)]
         cur_idx_pos = self.pos_idx[:np.searchsorted(
             self.pos_idx, self.cur_idx)]
-        hists, labels, refs = [], [], []
+        hists, labels, pastk = [], [], []
 
         if cur_idx_neg and num_neg_to_sample > 0:
 
@@ -45,13 +48,15 @@ class ReplayBuffer:
             )
 
             neg_samples = [self.dataset[i] for i in rand_idx_neg]
+            neg_hists = [s["histogram"] for s in neg_samples]
 
-            hists.append(torch.stack([s["histogram"] for s in neg_samples]))
+            hists.append(torch.stack(neg_hists))
             labels.append(torch.stack([s["is_anomaly"] for s in neg_samples]))
 
-            if self.store_ref:
-                ref_samples = [self.refs[i] for i in rand_idx_neg]
-                refs.append(torch.stack(ref_samples))
+            if self.k_past > 0:
+                neg_pastk = [self.get_neg_pastk_samples(
+                    i) for i in rand_idx_neg]
+                pastk.append(torch.stack(neg_pastk))
 
         if cur_idx_pos and num_pos_to_sample > 0:
 
@@ -66,13 +71,15 @@ class ReplayBuffer:
             )
 
             pos_samples = [self.dataset[i] for i in rand_idx_pos]
+            pos_hists = [s["histogram"] for s in pos_samples]
 
-            hists.append(torch.stack([s["histogram"] for s in pos_samples]))
+            hists.append(torch.stack(pos_hists))
             labels.append(torch.stack([s["is_anomaly"] for s in pos_samples]))
 
-            if self.store_ref:
-                ref_samples = [self.refs[i] for i in rand_idx_pos]
-                refs.append(torch.stack(ref_samples))
+            if self.k_past > 0:
+                neg_pastk = [self.get_neg_pastk_samples(
+                    i) for i in rand_idx_pos]
+                pastk.append(torch.stack(neg_pastk))
 
         if not hists:
             raise ValueError("No samples in the replay buffer")
@@ -80,8 +87,25 @@ class ReplayBuffer:
             return {
                 "hist": torch.cat(hists, dim=0),
                 "labels": torch.cat(labels, dim=0),
-                "refs": torch.cat(refs, dim=0) if self.store_ref else None
+                "pastk": torch.cat(pastk, dim=0) if self.k_past > 0 else None
             }
+
+    def get_neg_pastk_samples(self, idx):
+
+        # Do it like this since we want the closest index below the current,
+        # not including the current
+        idx = max(np.searchsorted(self.neg_idx, idx) - 1, 0)
+
+        neg_pastk_idx = self.neg_idx[max(idx-self.k_past, 0):idx]
+
+        if len(neg_pastk_idx) < self.k_past:
+            pad = [self.neg_idx[0]
+                   for _ in range(self.k_past-len(neg_pastk_idx))]
+            neg_pastk_idx = pad + neg_pastk_idx
+
+        neg_pastk_samples = [self.dataset[i] for i in neg_pastk_idx]
+
+        return torch.stack([s["histogram"] for s in neg_pastk_samples])
 
     def update(self, num_steps: int):
         self.cur_idx += num_steps
@@ -89,8 +113,8 @@ class ReplayBuffer:
     def __call__(
             self,
             hist: torch.Tensor,
-            labels: torch.Tensor | None = None,
-            refs: torch.Tensor | None = None):
+            labels: torch.Tensor,
+            pastk: torch.Tensor | None = None):
 
         num_pos = int(labels[labels == 1].sum().item())
 
@@ -106,18 +130,20 @@ class ReplayBuffer:
 
         try:
             res = self.get_rand_past_samples(
-                num_neg_to_sample, num_pos_to_sample
+                num_neg_to_sample,
+                num_pos_to_sample,
             )
 
             rand_hist = res["hist"]
             rand_labels = res["labels"]
-            rand_refs = res["refs"]
+            rand_pastk = res["pastk"]
 
         except ValueError:
-            return hist, labels, refs
+            return hist, labels, pastk
         else:
             rand_hist = rand_hist.to(hist.device)
             rand_labels = rand_labels.to(labels.device)
+
             augmented_hist = torch.cat([hist, rand_hist], dim=0)
             augmented_labels = torch.cat([labels, rand_labels], dim=0)
 
@@ -125,13 +151,11 @@ class ReplayBuffer:
             out_hist = augmented_hist[rand_idx]
             out_labels = augmented_labels[rand_idx]
 
-            if self.store_ref:
-                augmented_refs = torch.cat([refs, rand_refs], dim=0)
-                out_refs = augmented_refs[rand_idx]
+            if self.k_past > 0:
+                rand_pastk = rand_pastk.to(pastk.device)
+                augmented_pastk = torch.cat([pastk, rand_pastk], dim=0)
+                out_pastk = augmented_pastk[rand_idx]
             else:
-                out_refs = None
+                out_pastk = None
 
-            return out_hist, out_labels, out_refs
-
-    def add_ref(self, ref: torch.Tensor):
-        self.refs.append(ref)
+            return out_hist, out_labels, out_pastk

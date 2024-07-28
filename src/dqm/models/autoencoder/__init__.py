@@ -1,1 +1,1 @@
-from .mlp import AutoMLP
+from .mlp import AutoMLP, AutoMLPSep, AutoMLPSepParallel

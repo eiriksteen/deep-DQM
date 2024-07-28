@@ -16,9 +16,7 @@ from sklearn.metrics import (
     roc_auc_score,
     RocCurveDisplay
 )
-from dqm.deep_models import AutoMLP
-
-from dqm.reference_builder import RefBuilder
+from dqm.models.autoencoder import AutoMLP, AutoMLPSepParallel
 from dqm.torch_datasets import LHCbDataset, SyntheticDataset, SequentialDataset
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
@@ -87,12 +85,14 @@ def train(
 
     for batch_num, sample in enumerate(tqdm(loader)):
 
-        histogram = sample["histogram"].to(DEVICE)
-        is_anomaly = sample["is_anomaly"].to(DEVICE)
+        with torch.no_grad():
 
-        logits = autoencoder(histogram)
-        loss = F.mse_loss(logits, histogram)
-        loss_per_step.append(loss.item())
+            histogram = sample["histogram"].to(DEVICE)
+            is_anomaly = sample["is_anomaly"].to(DEVICE)
+
+            logits = autoencoder(histogram)
+            loss = F.mse_loss(logits, histogram)
+            loss_per_step.append(loss.item())
 
         if batch_num == int(args.warmup_frac * len(data)):
             print(f"WARMUP FINISHED. LOSS: {np.mean(loss_per_step)}")
@@ -100,31 +100,41 @@ def train(
         if batch_num > 0:
 
             errs = (logits - histogram).abs().mean(-1)
-            scores = errs.mean(-1)  # errs.max(-1).values
-            aidx = torch.argmax(errs, dim=-1)
+            scores = errs.max(-1).values  # errs.max(-1).values
+            # aidx = torch.argmax(errs, dim=-1)
 
             if args.plot:
-                # Plot reconstructions and the score
-                # higher recon error -> higher anomaly score
+
+                hist_cpu = histogram.detach().cpu().numpy()
+                logits_cpu = logits.detach().cpu().numpy()
+
                 recon_dir = out_dir / "reconstructions"
                 recon_dir.mkdir(exist_ok=True)
-                _, ax = plt.subplots(nrows=2, figsize=(10, 5))
-                ax[0].imshow(logits[0].detach().cpu().numpy())
-                ax[0].set_title(f"Score = {scores[0].item()}, Anomaly = {
-                                is_anomaly[0].item()}")
-
-                ax[1].plot(histogram[0, aidx[0].item()].detach().cpu().numpy())
-                ax[1].plot(logits[0, aidx[0].item()].detach().cpu().numpy())
-                ax[1].set_title("Reconstruction Hist 1")
+                full_size = len(hist_cpu[0].flatten())
+                fig, ax = plt.subplots(nrows=4)
+                fig.suptitle(f"Is anomaly: {is_anomaly[0].item()}\nScore: {
+                             scores[0].item()}")
+                ax[0].plot(hist_cpu[0].flatten()[:full_size//4])
+                ax[0].plot(logits_cpu[0].flatten()[:full_size//4], alpha=0.3)
+                ax[0].legend(["Original", "Reconstructed"])
+                ax[1].plot(hist_cpu[0].flatten()[full_size//4:2*full_size//4])
+                ax[1].plot(logits_cpu[0].flatten()[
+                           full_size//4:2*full_size//4], alpha=0.3)
                 ax[1].legend(["Original", "Reconstructed"])
-                plt.tight_layout()
+                ax[2].plot(hist_cpu[0].flatten()[
+                           2*full_size//4:3*full_size//4])
+                ax[2].plot(logits_cpu[0].flatten()[
+                           2*full_size//4:3*full_size//4], alpha=0.3)
+                ax[2].legend(["Original", "Reconstructed"])
+                ax[3].plot(hist_cpu[0].flatten()[3*full_size//4:])
+                ax[3].plot(logits_cpu[0].flatten()[3*full_size//4:], alpha=0.3)
+                ax[3].legend(["Original", "Reconstructed"])
+
                 plt.savefig(recon_dir / f"recon_{batch_num}.png")
                 plt.close()
 
             total_labels += is_anomaly.detach().flatten().cpu().tolist()
             total_scores += scores.detach().flatten().cpu().tolist()
-
-        # Train model on current batch
 
         neg_idx = (is_anomaly == 0).nonzero(as_tuple=True)[0]
         is_anomaly = is_anomaly[neg_idx]
@@ -132,9 +142,13 @@ def train(
 
         if len(is_anomaly) > 0:
 
+            # Train model on current batch
+
+            model.train()
+
             for _ in range(args.steps_per_batch):
 
-                # Resample from replay buffer each step (simulate epochs)
+                # Resample from replay buffer each step(simulate epochs)
                 histogram_resampled, _, _ = replay_buffer(
                     histogram, is_anomaly)
 
@@ -239,13 +253,13 @@ if __name__ == "__main__":
         raise ValueError(
             f"Year {args.year} not supported. Choose from {years}")
 
-    models = ["automlp"]
+    models = ["automlp", "automlpsep"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
 
     out_dir = Path(
-        f"./{args.model}autoe_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
+        f"./{args.model}_auto_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
     out_dir.mkdir(exist_ok=True)
 
     with open(out_dir / "config.json", "w") as f:
@@ -279,8 +293,10 @@ if __name__ == "__main__":
 
         print(f"RUN {run + 1}/{args.n_runs}")
 
-        if args.model == "autotran":
+        if args.model == "automlp":
             model = AutoMLP(data.num_bins, data.num_features, 32)
+        elif args.model == "automlpsep":
+            model = AutoMLPSepParallel(data.num_bins, data.num_features, 32)
         else:
             raise ValueError("Model not supported")
 

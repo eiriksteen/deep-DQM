@@ -12,7 +12,7 @@ from sklearn.metrics import (
     precision_recall_curve,
     roc_curve
 )
-from dqm.shallow_models import ChiSquareModel
+from dqm.models.classification.shallow_models import ChiSquareModel
 from dqm.settings import DATA_DIR
 from dqm.torch_datasets import SyntheticDataset
 from dqm.utils import compute_results_summary, plot_metrics_per_step
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="lhcb")
     parser.add_argument("--year", type=int, default=2018)
     parser.add_argument("--warmup_frac", type=float, default=0.2)
-    parser.add_argument("optimise_hyperparameters",
+    parser.add_argument("--optimize_hyperparameters",
                         action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
@@ -60,8 +60,8 @@ if __name__ == "__main__":
 
     else:
         data = SyntheticDataset(
-            size=500,
-            num_variables=50,
+            size=1000,
+            num_variables=100,
             num_bins=100,
             whiten=False,
             whiten_running=False
@@ -84,7 +84,7 @@ if __name__ == "__main__":
 
         print(f"RUN {run + 1}/{args.n_runs}")
         if args.dataset == "synthetic":
-            alpha = 0.355389  # 0.11351591384976992
+            alpha = 0.0001143748173448866
         elif args.year == 2018:
             alpha = 0.529
         else:
@@ -95,7 +95,7 @@ if __name__ == "__main__":
             is_anomaly=is_anomaly,
             histo_nbins_dict=histo_nbins_dict,
             alpha=alpha,
-            optimise_hyperparameters=args.optimise_hyperparameters
+            optimise_hyperparameters=args.optimize_hyperparameters
         )
 
         scores, preds, labels = model.fit()

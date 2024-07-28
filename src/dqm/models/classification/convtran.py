@@ -75,14 +75,13 @@ class MLPBlock(nn.Module):
         return self.norm(self.mlp(x) + x)
 
 
-class Transformer(nn.Module):
+class ConvTran(nn.Module):
 
     def __init__(
             self,
             in_dim: int,
             in_channels: int,
             hidden_dim: int,
-            k_past: int,
             sigmoid_attn: bool = False,
             use_ref: bool = False
     ):
@@ -92,56 +91,48 @@ class Transformer(nn.Module):
         self.patch_size = in_dim
         self.in_dim = in_channels
         self.hidden_dim = hidden_dim
-        self.k_past = k_past
+        self.in_channels = in_channels
+        ###
+        self.hidden_channels = 64
+        ###
         self.use_ref = use_ref
 
-        self.pos_embed = nn.Embedding(in_channels, in_dim)
-
-        self.past_weights = nn.Parameter(
-            torch.randn(k_past)
-        ) if use_ref else None
+        self.embed = nn.Sequential(
+            nn.Conv1d(self.in_channels, self.hidden_channels, 5, 2, 2),
+            nn.ReLU(),
+            nn.Conv1d(self.hidden_channels, self.hidden_channels, 5, 1, 2),
+        )
 
         self.change_detector = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Conv1d(self.hidden_channels, self.hidden_channels, 5, 1, 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.Conv1d(self.hidden_channels, self.hidden_channels, 5, 1, 2),
         ) if use_ref else None
 
-        self.embed = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
+        self.out_conv = nn.Sequential(
+            nn.Conv1d(self.hidden_channels, self.hidden_channels, 5, 2, 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Conv1d(self.hidden_channels, self.hidden_channels, 5, 1, 2),
         )
 
-        self.mha = MultiHeadAttentionBlock(
-            hidden_dim,
-            sigmoid=sigmoid_attn,
-            num_heads=4
-        )
-
-        self.mlp = MLPBlock(hidden_dim)
-
-        self.head = nn.Linear(hidden_dim, 1)
+        self.head = nn.Linear(64*25, 1)
 
     def forward(
             self,
             x: torch.Tensor,
-            past: torch.Tensor | None = None
+            ref: torch.Tensor | None = None
     ):
 
-        x_latents = self.embed(x + self.pos_embed.weight)
+        x_latents = self.embed(x)
 
         if self.use_ref:
-
-            past_latents = self.embed(past + self.pos_embed.weight)
-            past_weights = F.softmax(self.past_weights)[None, :, None, None]
-            past_latents = (past_latents * past_weights).sum(dim=1)
-            c = self.change_detector((past_latents - x_latents).abs())
+            ref_latents = self.embed(ref)
+            c = self.change_detector((ref_latents - x_latents).abs())
             x_latents += c
 
-        attn_logits, attn_weights = self.mha(x_latents)
-        logits = self.mlp(attn_logits)
-        out = self.head(logits.mean(dim=1))
-        scores = attn_weights.mean(dim=1).mean(dim=1)
+        # print(x_latents.shape)
 
-        return {"logits": out, "attn_weights": attn_weights, "prob": scores}
+        out = self.out_conv(x_latents)
+        out = self.head(out.flatten(1))
+
+        return {"logits": out}

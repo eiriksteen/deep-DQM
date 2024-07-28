@@ -1,4 +1,3 @@
-from sklearn.metrics import balanced_accuracy_score
 import torch
 import warnings
 import numpy as np
