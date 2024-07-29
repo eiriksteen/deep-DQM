@@ -312,18 +312,18 @@ class SyntheticDataset(SequentialDataset):
 
         return np.array(data), np.array(labels), np.array(anomaly_idx)
 
-    def subsample_histogram(self, histogram: np.ndarray, num_samples: int, label, idx) -> np.ndarray:
+    # def subsample_histogram(self, histogram: np.ndarray, num_samples: int, label, idx) -> np.ndarray:
 
-        _, ax = plt.subplots(ncols=2)
-        histogram_norm = histogram / histogram.sum()
-        subsample = np.random.multinomial(num_samples, histogram_norm)
-        if idx == 0:
-            plt.title(f"Is anomaly is {label}")
-            ax[0].plot(histogram)
-            ax[1].plot(subsample)
-            plt.show()
+    #     _, ax = plt.subplots(ncols=2)
+    #     histogram_norm = histogram / histogram.sum()
+    #     subsample = np.random.multinomial(num_samples, histogram_norm)
+    #     if idx == 0:
+    #         plt.title(f"Is anomaly is {label}")
+    #         ax[0].plot(histogram)
+    #         ax[1].plot(subsample)
+    #         plt.show()
 
-        return subsample
+    #     return subsample
 
     def get_histogram_names(self) -> list[str]:
         return [f"var_{i}" for i in range(self.num_features)]

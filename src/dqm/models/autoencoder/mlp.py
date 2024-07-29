@@ -19,16 +19,20 @@ class AutoMLP(nn.Module):
 
         self.pos_embed = nn.Embedding(in_channels, in_dim)
 
-        self.encoder = nn.Sequential(
+        self.mu_encoder = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
-            nn.Dropout(0.2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+        self.logvar_encoder = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
         self.decoder = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.Dropout(0.2),
             nn.ReLU(),
             nn.Linear(hidden_dim, in_dim),
         )
@@ -36,7 +40,9 @@ class AutoMLP(nn.Module):
     def forward(self, x: torch.Tensor):
 
         x_ = x + self.pos_embed.weight
-        latents = self.encoder(x_)
+        mu = self.mu_encoder(x_)
+        logvar = self.logvar_encoder(x_)
+        latents = mu + torch.randn_like(mu)*torch.e**logvar
         out = self.decoder(latents)
 
         return out
@@ -55,23 +61,29 @@ class AutoMLPSep(nn.Module):
         self.in_dim = in_dim
         self.hidden_dim = hidden_dim
 
-        self.encoder = nn.Sequential(
+        self.mu_encoder = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
-            nn.Dropout(0.2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+
+        self.logvar_encoder = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
         self.decoder = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.Dropout(0.2),
             nn.ReLU(),
             nn.Linear(hidden_dim, in_dim),
         )
 
     def forward(self, x: torch.Tensor):
 
-        latents = self.encoder(x)
+        mu = self.mu_encoder(x)
+        logvar = self.logvar_encoder(x)
+        latents = mu + torch.randn_like(mu)*torch.e**logvar
         out = self.decoder(latents)
 
         return out

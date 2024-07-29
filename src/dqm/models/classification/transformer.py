@@ -75,16 +75,14 @@ class MLPBlock(nn.Module):
         return self.norm(self.mlp(x) + x)
 
 
-class Transformer(nn.Module):
+class ConTran(nn.Module):
 
     def __init__(
             self,
             in_dim: int,
             in_channels: int,
             hidden_dim: int,
-            k_past: int,
-            sigmoid_attn: bool = False,
-            use_ref: bool = False
+            k_past: int
     ):
 
         super().__init__()
@@ -93,19 +91,18 @@ class Transformer(nn.Module):
         self.in_dim = in_channels
         self.hidden_dim = hidden_dim
         self.k_past = k_past
-        self.use_ref = use_ref
 
         self.pos_embed = nn.Embedding(in_channels, in_dim)
 
         self.past_weights = nn.Parameter(
             torch.randn(k_past)
-        ) if use_ref else None
+        )
 
         self.change_detector = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim)
-        ) if use_ref else None
+        )
 
         self.embed = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
@@ -113,9 +110,18 @@ class Transformer(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
+        self.W_conv = nn.Sequential(
+            nn.Conv2d(k_past+1, k_past+1, (1, 8), padding="same"),
+            nn.ReLU(),
+            nn.Conv2d(k_past+1, k_past+1, (in_channels, 1)),
+            nn.ReLU(),
+            nn.Linear(in_dim, 1),
+            nn.Flatten()
+        )
+
         self.mha = MultiHeadAttentionBlock(
             hidden_dim,
-            sigmoid=sigmoid_attn,
+            sigmoid=False,
             num_heads=4
         )
 
@@ -123,21 +129,19 @@ class Transformer(nn.Module):
 
         self.head = nn.Linear(hidden_dim, 1)
 
-    def forward(
-            self,
-            x: torch.Tensor,
-            past: torch.Tensor | None = None
-    ):
+    def forward(self, x: torch.Tensor, past: torch.Tensor | None = None):
+
+        # b,k,n,d -> b,k+1,n,d -> b,n,k+1,d -> conv -> b, n
+
+        z = torch.cat([x.unsqueeze(1), past], dim=1)
+        w = F.softmax(self.W_conv(z)[:, :-1], dim=-1)
 
         x_latents = self.embed(x + self.pos_embed.weight)
+        past_latents = self.embed(past + self.pos_embed.weight)
 
-        if self.use_ref:
-
-            past_latents = self.embed(past + self.pos_embed.weight)
-            past_weights = F.softmax(self.past_weights)[None, :, None, None]
-            past_latents = (past_latents * past_weights).sum(dim=1)
-            c = self.change_detector((past_latents - x_latents).abs())
-            x_latents += c
+        past_latents = (past_latents * w[:, :, None, None]).sum(dim=1)
+        c = self.change_detector((past_latents - x_latents).abs())
+        x_latents += c
 
         attn_logits, attn_weights = self.mha(x_latents)
         logits = self.mlp(attn_logits)
@@ -145,3 +149,22 @@ class Transformer(nn.Module):
         scores = attn_weights.mean(dim=1).mean(dim=1)
 
         return {"logits": out, "attn_weights": attn_weights, "prob": scores}
+
+    # def forward(self, x: torch.Tensor, past: torch.Tensor | None = None):
+
+    #     x_latents = self.embed(x + self.pos_embed.weight)
+
+    #     # (b, k, n, d) -> mean(2) -> (b, k, d) -> append x.mean(1) -> (b, k+1, d)
+    #     # -> attention -> mean(-1) -> (b, k+1) -> sigmoid -> weights
+    #     past_latents = self.embed(past + self.pos_embed.weight)
+    #     past_weights = F.softmax(self.past_weights)[None, :, None, None]
+    #     past_latents = (past_latents * past_weights).sum(dim=1)
+    #     c = self.change_detector((past_latents - x_latents).abs())
+    #     x_latents += c
+
+    #     attn_logits, attn_weights = self.mha(x_latents)
+    #     logits = self.mlp(attn_logits)
+    #     out = self.head(logits.mean(dim=1))
+    #     scores = attn_weights.mean(dim=1).mean(dim=1)
+
+    #     return {"logits": out, "attn_weights": attn_weights, "prob": scores}

@@ -18,7 +18,7 @@ from sklearn.metrics import (
 )
 from dqm.models.classification import (
     ContextMLP,
-    Transformer,
+    ConTran,
     ConvTran
 )
 from dqm.reference_builder import RefBuilder
@@ -268,18 +268,16 @@ if __name__ == "__main__":
             model = ContextMLP(
                 data.num_bins, data.num_features, 128, use_ref=True)
         elif args.model == "tran":
-            model = Transformer(
+            model = ConTran(
                 data.num_bins,
                 data.num_features,
-                128,
-                k_past=args.k_past,
-                sigmoid_attn=False,
-                use_ref=True)
+                100,
+                k_past=args.k_past)
         elif args.model == "convtran":
             model = ConvTran(
                 data.num_bins,
                 data.num_features,
-                128,
+                100,
                 use_ref=True)
         else:
             raise ValueError("Model not supported")
