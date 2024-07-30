@@ -9,7 +9,7 @@ from ..utils import rebin
 np.random.seed(42)
 
 
-class SequentialDataset(Dataset):
+class DataStream(Dataset):
 
     def __init__(
         self,
@@ -18,7 +18,6 @@ class SequentialDataset(Dataset):
         histo_nbins_dict: dict[str, int],
         anomaly_idx: np.ndarray | None = None,
         whiten: bool = True,
-        whiten_running: bool = True,
         to_torch: bool = True
     ):
 
@@ -41,9 +40,6 @@ class SequentialDataset(Dataset):
         if whiten:
             self.whiten()
 
-        if whiten_running:
-            self.whiten_running()
-
     def __len__(self):
         return self.size
 
@@ -51,10 +47,6 @@ class SequentialDataset(Dataset):
 
         histogram = self.data[idx]
         is_anomaly = self.labels[idx]
-
-        mu = histogram.mean()
-        std = histogram.std()
-        histogram = (histogram - mu) / (std + 1e-06)
 
         if self.to_torch:
             histogram = torch.tensor(histogram).float()
@@ -77,23 +69,7 @@ class SequentialDataset(Dataset):
 
         mu = self.data.mean(axis=-1, keepdims=True)
         std = self.data.std(axis=-1, keepdims=True)
-        std = np.where(std < 1e-06, 1e-06, std)
-        self.data = (self.data - mu) / std
-
-    def whiten_running(self):
-
-        data_cusum = np.cumsum(self.data, axis=0)
-        cu_slice = np.s_[:, None] if self.data.ndim == 2 else np.s_[
-            :, None, None]
-        running_mean = data_cusum / np.arange(1, self.size + 1)[cu_slice]
-
-        running_std = np.zeros_like(self.data)
-        for t in range(1, self.size):
-            running_std[t] = np.sqrt(
-                (t * running_std[t-1]**2 + (self.data[t] - running_mean[t])**2) / (t+1))
-
-        running_std = np.where(running_std < 1e-06, 1e-06, running_std)
-        self.data = (self.data - running_mean) / running_std
+        self.data = (self.data - mu) / (std + 1e-06)
 
     def get_pos_neg_idx(self):
 
@@ -116,7 +92,7 @@ class SequentialDataset(Dataset):
         return out
 
 
-class LHCbDataset(SequentialDataset):
+class LHCbDataset(DataStream):
 
     def __init__(
         self,
@@ -124,7 +100,6 @@ class LHCbDataset(SequentialDataset):
         histo_nbins_dict: dict[str, int],
         num_bins: int = 100,
         whiten: bool = True,
-        whiten_running: bool = True,
         to_torch: bool = True
     ):
 
@@ -141,7 +116,6 @@ class LHCbDataset(SequentialDataset):
                          labels=self.labels,
                          histo_nbins_dict=histo_nbins_dict,
                          whiten=whiten,
-                         whiten_running=whiten_running,
                          to_torch=to_torch)
 
     def undo_concat(self):
@@ -181,7 +155,7 @@ class LHCbDataset(SequentialDataset):
         return list(self.histo_nbins_dict.keys())
 
 
-class SyntheticDataset(SequentialDataset):
+class SyntheticDataset(DataStream):
 
     def __init__(
             self,
@@ -190,7 +164,6 @@ class SyntheticDataset(SequentialDataset):
             num_bins,
             nominal_fraction: float = 0.975,
             whiten: bool = True,
-            whiten_running: bool = True,
             to_torch: bool = True
     ):
 
@@ -228,7 +201,6 @@ class SyntheticDataset(SequentialDataset):
                 f"var_{i}": num_bins for i in range(num_variables)},
             anomaly_idx=self.anomaly_idx,
             whiten=whiten,
-            whiten_running=whiten_running,
             to_torch=to_torch
 
         )
@@ -296,13 +268,6 @@ class SyntheticDataset(SequentialDataset):
                     range=(-15, 15)
                 )
 
-                # if num_samples_per_hist_anomaly != num_samples_per_hist_nominal:
-
-                #     hist = self.subsample_histogram(
-                #         hist, min(num_samples_per_hist_nominal,
-                #                   num_samples_per_hist_anomaly), is_anomaly, idx
-                #     )
-
                 sample.append(hist)
 
             data.append(sample)
@@ -311,19 +276,6 @@ class SyntheticDataset(SequentialDataset):
             prev_is_anomaly = is_anomaly
 
         return np.array(data), np.array(labels), np.array(anomaly_idx)
-
-    # def subsample_histogram(self, histogram: np.ndarray, num_samples: int, label, idx) -> np.ndarray:
-
-    #     _, ax = plt.subplots(ncols=2)
-    #     histogram_norm = histogram / histogram.sum()
-    #     subsample = np.random.multinomial(num_samples, histogram_norm)
-    #     if idx == 0:
-    #         plt.title(f"Is anomaly is {label}")
-    #         ax[0].plot(histogram)
-    #         ax[1].plot(subsample)
-    #         plt.show()
-
-    #     return subsample
 
     def get_histogram_names(self) -> list[str]:
         return [f"var_{i}" for i in range(self.num_features)]

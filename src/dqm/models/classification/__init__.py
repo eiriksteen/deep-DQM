@@ -1,6 +1,2 @@
-from .cmlp import ContextMLP
-from .mlp import MLP
-from .resnet1d import ResNet1D
-from .cnn import CNN1D, CNN2D
-from .transformer import ConTran
-from .convtran import ConvTran
+from .act import AdaptiveConvolutionalTransformer
+from .shallow_models import ChiSquareModel, CopyModel

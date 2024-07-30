@@ -16,13 +16,8 @@ from sklearn.metrics import (
     roc_auc_score,
     RocCurveDisplay
 )
-from dqm.models.classification import (
-    ContextMLP,
-    ConTran,
-    ConvTran
-)
-from dqm.reference_builder import RefBuilder
-from dqm.torch_datasets import LHCbDataset, SyntheticDataset, SequentialDataset
+from dqm.models.classification import AdaptiveConvolutionalTransformer
+from dqm.torch_datasets import LHCbDataset, SyntheticDataset, DataStream
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
@@ -38,7 +33,7 @@ torch.manual_seed(42)
 
 def train(
     classifier: nn.Module,
-    data: SequentialDataset,
+    data: DataStream,
     args: argparse.Namespace
 ):
 
@@ -201,21 +196,18 @@ def train(
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--year", type=int, default=2023)
+    parser.add_argument("--model", type=str, default="act")
     parser.add_argument("--steps_per_batch", type=int, default=4)
     parser.add_argument("--num_bins", type=int, default=100)
-    parser.add_argument("--k_past", type=int, default=20)
+    parser.add_argument("--k_past", type=int, default=5)
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--n_runs", type=int, default=5)
-    parser.add_argument("--model", type=str, default="tran")
     parser.add_argument("--dataset", type=str, default="lhcb")
+    parser.add_argument("--year", type=int, default=2018)
     parser.add_argument("--warmup_frac", type=float, default=0.2)
     parser.add_argument("--warmup_synthetic",
                         action=argparse.BooleanOptionalAction)
-    # replay ratio as a fraction of the batch size
-    # (0.5 means there are 0.5 * batch_size replayed samples,
-    # while there are batch_size new samples)
     parser.add_argument("--plot", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
@@ -224,7 +216,7 @@ if __name__ == "__main__":
         raise ValueError(
             f"Year {args.year} not supported. Choose from {years}")
 
-    models = ["tran", "cmlp", "convtran"]
+    models = ["act"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
@@ -244,8 +236,7 @@ if __name__ == "__main__":
             histo_nbins_dict=histo_nbins_dict,
             # Should center and norm both row and column-wise
             num_bins=args.num_bins,
-            whiten=False,
-            whiten_running=False,
+            whiten=True,
             to_torch=True
         )
     else:
@@ -253,8 +244,7 @@ if __name__ == "__main__":
             size=1000,
             num_variables=100,
             num_bins=100,
-            whiten=False,
-            whiten_running=False
+            whiten=True
         )
 
     print(data)
@@ -264,21 +254,12 @@ if __name__ == "__main__":
 
         print(f"RUN {run + 1}/{args.n_runs}")
 
-        if args.model == "cmlp":
-            model = ContextMLP(
-                data.num_bins, data.num_features, 128, use_ref=True)
-        elif args.model == "tran":
-            model = ConTran(
+        if args.model == "act":
+            model = AdaptiveConvolutionalTransformer(
                 data.num_bins,
                 data.num_features,
                 100,
                 k_past=args.k_past)
-        elif args.model == "convtran":
-            model = ConvTran(
-                data.num_bins,
-                data.num_features,
-                100,
-                use_ref=True)
         else:
             raise ValueError("Model not supported")
 

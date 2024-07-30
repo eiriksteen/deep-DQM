@@ -75,7 +75,7 @@ class MLPBlock(nn.Module):
         return self.norm(self.mlp(x) + x)
 
 
-class ConTran(nn.Module):
+class AdaptiveConvolutionalTransformer(nn.Module):
 
     def __init__(
             self,
@@ -94,28 +94,24 @@ class ConTran(nn.Module):
 
         self.pos_embed = nn.Embedding(in_channels, in_dim)
 
-        self.past_weights = nn.Parameter(
-            torch.randn(k_past)
-        )
-
         self.change_detector = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
         )
 
         self.embed = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
         self.W_conv = nn.Sequential(
-            nn.Conv2d(k_past+1, k_past+1, (1, 8), padding="same"),
-            nn.ReLU(),
             nn.Conv2d(k_past+1, k_past+1, (in_channels, 1)),
             nn.ReLU(),
-            nn.Linear(in_dim, 1),
+            nn.Conv2d(k_past+1, k_past+1, (1, in_dim)),
             nn.Flatten()
         )
 
@@ -138,7 +134,6 @@ class ConTran(nn.Module):
 
         x_latents = self.embed(x + self.pos_embed.weight)
         past_latents = self.embed(past + self.pos_embed.weight)
-
         past_latents = (past_latents * w[:, :, None, None]).sum(dim=1)
         c = self.change_detector((past_latents - x_latents).abs())
         x_latents += c

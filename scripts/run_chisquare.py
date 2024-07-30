@@ -86,7 +86,7 @@ if __name__ == "__main__":
         if args.dataset == "synthetic":
             alpha = 0.0001143748173448866
         elif args.year == 2018:
-            alpha = 0.529
+            alpha = 0.715  # 0.529
         else:
             alpha = 0.02885998
 

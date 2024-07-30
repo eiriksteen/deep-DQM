@@ -16,8 +16,8 @@ from sklearn.metrics import (
     roc_auc_score,
     RocCurveDisplay
 )
-from dqm.models.autoencoder import AutoMLP, AutoMLPSepParallel
-from dqm.torch_datasets import LHCbDataset, SyntheticDataset, SequentialDataset
+from dqm.models.autoencoder import AutoMLP
+from dqm.torch_datasets import LHCbDataset, SyntheticDataset, DataStream
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
@@ -33,7 +33,7 @@ torch.manual_seed(42)
 
 def warmup_synthetic(
         autoencoder: nn.Module,
-        data: SequentialDataset,
+        data: DataStream,
         args: argparse.Namespace
 ):
 
@@ -71,12 +71,12 @@ def warmup_synthetic(
 
 def train(
     autoencoder: nn.Module,
-    data: SequentialDataset,
+    data: DataStream,
     args: argparse.Namespace
 ):
 
     autoencoder = autoencoder.to(DEVICE)
-    replay_buffer = ReplayBuffer(data, classes="neg", store_ref=False)
+    replay_buffer = ReplayBuffer(data, classes="neg")
     optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
     loader = DataLoader(data, batch_size=args.batch_size, shuffle=False)
 
@@ -253,7 +253,7 @@ if __name__ == "__main__":
         raise ValueError(
             f"Year {args.year} not supported. Choose from {years}")
 
-    models = ["automlp", "automlpsep"]
+    models = ["automlp"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
@@ -273,8 +273,7 @@ if __name__ == "__main__":
             histo_nbins_dict=histo_nbins_dict,
             # Should center and norm both row and column-wise
             num_bins=args.num_bins,
-            whiten=False,
-            whiten_running=False,
+            whiten=True,
             to_torch=True
         )
     else:
@@ -282,8 +281,8 @@ if __name__ == "__main__":
             size=1000,
             num_variables=100,
             num_bins=100,
-            whiten=False,
-            whiten_running=False
+            whiten=True,
+            to_torch=True
         )
 
     print(data)
@@ -295,8 +294,6 @@ if __name__ == "__main__":
 
         if args.model == "automlp":
             model = AutoMLP(data.num_bins, data.num_features, 32)
-        elif args.model == "automlpsep":
-            model = AutoMLPSepParallel(data.num_bins, data.num_features, 32)
         else:
             raise ValueError("Model not supported")
 
