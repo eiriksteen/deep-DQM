@@ -1,11 +1,11 @@
 import argparse
 import json
-from matplotlib.lines import Line2D
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 from pathlib import Path
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -17,12 +17,14 @@ from sklearn.metrics import (
     RocCurveDisplay
 )
 from dqm.models.classification import AdaptiveConvolutionalTransformer
-from dqm.torch_datasets import LHCbDataset, SyntheticDataset, DataStream
+from dqm.torch_datasets import LHCbDataset, SyntheticDataset
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
     compute_results_summary,
-    plot_scores,
+    plot_source_preds,
+    compute_source_preds_results_summary,
+    plot_metrics_per_step
 )
 from dqm.settings import HISTO_NBINS_DICT_2018, HISTO_NBINS_DICT_2023
 
@@ -33,7 +35,7 @@ torch.manual_seed(42)
 
 def train(
     classifier: nn.Module,
-    data: DataStream,
+    data: LHCbDataset | SyntheticDataset,
     args: argparse.Namespace
 ):
 
@@ -44,9 +46,11 @@ def train(
     loss_fn = nn.BCEWithLogitsLoss()
     loader = DataLoader(data, batch_size=args.batch_size, shuffle=False)
 
-    total_probs, total_labels = [], []
+    total_scores, total_labels = [], []
+    total_source_preds, total_source_labels = [], []
     loss_per_step = []
     num_steps = args.steps_per_batch
+    warmup = True
 
     for batch_num, sample in enumerate(tqdm(loader)):
 
@@ -67,31 +71,37 @@ def train(
 
         if batch_num == int(args.warmup_frac * len(data)):
             print(f"WARMUP FINISHED. LOSS: {np.mean(loss_per_step)}")
+            warmup = False
 
         if batch_num > 0:
 
-            probs = F.sigmoid(logits)
+            scores = F.sigmoid(logits)
 
-            if not (is_anomaly == (probs > 0.5)).all():
+            if not (is_anomaly == (scores > 0.5)).all():
                 num_steps = 2 * args.steps_per_batch
-                # cls_optimizer.param_groups[0]["lr"] = 10 * args.lr
             else:
                 num_steps = args.steps_per_batch
-                # cls_optimizer.param_groups[0]["lr"] = args.lr
 
             total_labels += is_anomaly.detach().flatten().cpu().tolist()
-            total_probs += probs.detach().flatten().cpu().tolist()
+            total_scores += scores.detach().flatten().cpu().tolist()
+
+            if "source_labels" in sample.keys() and (scores > 0.5).count_nonzero() and not warmup:
+                source_preds = out["source_preds"].detach().cpu()
+                source_labels = sample["source_labels"]
+                pos_idx = torch.where(scores > 0.5)[0].detach().cpu()
+
+                total_source_preds += source_preds[pos_idx].tolist()
+                total_source_labels += source_labels[pos_idx].tolist()
 
             if args.plot:
 
                 hist_cpu = histogram.detach().cpu().numpy()
-
                 preds_dir = out_dir / "preds"
                 preds_dir.mkdir(exist_ok=True)
                 full_size = len(hist_cpu[0].flatten())
                 fig, ax = plt.subplots(nrows=4)
                 fig.suptitle(f"Is anomaly: {is_anomaly[0].item()}\nScore: {
-                             probs[0].item()}")
+                             scores[0].item()}")
                 ax[0].plot(hist_cpu[0].flatten()[:full_size//4])
                 ax[1].plot(hist_cpu[0].flatten()[full_size//4:2*full_size//4])
                 ax[2].plot(hist_cpu[0].flatten()[
@@ -101,14 +111,16 @@ def train(
                 plt.savefig(preds_dir / f"pred_{batch_num}.png")
                 plt.close()
 
-                # if "prob" in out.keys():
-                #     scores_dir = out_dir / "probs"
-                #     scores_dir.mkdir(exist_ok=True)
-                #     scores = out["prob"]
+                if "source_preds" in out.keys() and is_anomaly.count_nonzero() > 0:
+                    source_preds_dir = out_dir / "source_preds"
+                    source_preds_dir.mkdir(exist_ok=True)
+                    source_preds = out["source_preds"]
+                    anomaly_idx = sample["source_labels"] if "source_labels" in sample.keys(
+                    ) else None
 
-                #     categories = data.get_histogram_names()
-                #     plot_scores(scores, categories, histogram, is_anomaly,
-                #                 scores_dir / f"{batch_num}.png", reference=ref_builder.mu)
+                    # categories = data.get_histogram_names()
+                    plot_source_preds(histogram, anomaly_idx,
+                                      source_preds, source_preds_dir / f"{batch_num}.png")
 
         # Train model on current batch
         model.train()
@@ -128,7 +140,7 @@ def train(
 
         replay_buffer.update(args.batch_size)
 
-    fpr, tpr, _ = roc_curve(total_labels, total_probs)
+    fpr, tpr, _ = roc_curve(total_labels, total_scores)
     RocCurveDisplay(fpr=fpr, tpr=tpr).plot()
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
@@ -136,7 +148,7 @@ def train(
     plt.close()
 
     precision, recall, _ = precision_recall_curve(
-        total_labels, total_probs)
+        total_labels, total_scores)
     plt.plot(recall, precision)
     plt.xlabel("Recall")
     plt.ylabel("Precision")
@@ -153,7 +165,7 @@ def train(
 
     start_idx = int(args.warmup_frac * len(data))
 
-    plt.scatter(range(len(total_probs)), total_probs, c=colors, alpha=0.6)
+    plt.scatter(range(len(total_scores)), total_scores, c=colors, alpha=0.6)
     tline = plt.axhline(y=0.5, color="blue", linestyle="--",
                         label="Threshold: 0.5")
     wline = plt.axvline(x=start_idx, color="orange",
@@ -166,7 +178,6 @@ def train(
                markerfacecolor="red", markersize=10)
     ]
 
-    # Add the line objects directly, no need for additional Line2D objects
     legend_elements += [tline, wline]
 
     plt.title("Probability Scatter Plot with Optimal Threshold")
@@ -174,22 +185,23 @@ def train(
     plt.ylabel("Probability")
     plt.ylim(-0.05, 1.05)
 
-    # Only call legend once, with all the elements
     plt.legend(handles=legend_elements, loc='best')
 
     plt.tight_layout()
     plt.savefig(out_dir / "prob_scatter.png")
     plt.close()
 
-    np.save(out_dir / "probs.npy", total_probs)
+    np.save(out_dir / "probs.npy", total_scores)
     np.save(out_dir / "labels.npy", total_labels)
 
     torch.save(classifier.state_dict(), out_dir / "model")
 
     return {
         "model": classifier,
-        "probs": total_probs,
-        "labels": total_labels
+        "probs": total_scores,
+        "labels": total_labels,
+        "source_preds": total_source_preds,
+        "source_labels": total_source_labels
     }
 
 
@@ -205,7 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("--n_runs", type=int, default=5)
     parser.add_argument("--dataset", type=str, default="lhcb")
     parser.add_argument("--year", type=int, default=2018)
-    parser.add_argument("--warmup_frac", type=float, default=0.2)
+    parser.add_argument("--warmup_frac", type=float, default=0.1)
     parser.add_argument("--warmup_synthetic",
                         action=argparse.BooleanOptionalAction)
     parser.add_argument("--plot", action=argparse.BooleanOptionalAction)
@@ -241,15 +253,16 @@ if __name__ == "__main__":
         )
     else:
         data = SyntheticDataset(
-            size=1000,
+            size=2000,
             num_variables=100,
-            num_bins=100,
+            num_bins=args.num_bins,
             whiten=True
         )
 
     print(data)
 
     total_probs, total_labels = [], []
+    total_source_preds, total_source_labels = [], []
     for run in range(args.n_runs):
 
         print(f"RUN {run + 1}/{args.n_runs}")
@@ -269,7 +282,13 @@ if __name__ == "__main__":
         out = train(model, data, args)
 
         start_idx = int(args.warmup_frac * len(data))
-        probs, labels = out["probs"][start_idx:], out["labels"][start_idx:]
+        probs, labels = out["probs"], out["labels"]
+        probs, labels = probs[start_idx:], labels[start_idx:]
+
+        if isinstance(data, SyntheticDataset):
+            source_preds, source_labels = out["source_preds"], out["source_labels"]
+            total_source_preds.append(source_preds)
+            total_source_labels.append(source_labels)
 
         print(f"AP: {average_precision_score(labels, probs)}")
         print(f"AUROC: {roc_auc_score(labels, probs)}")
@@ -280,13 +299,22 @@ if __name__ == "__main__":
     total_probs = np.array(total_probs)
     total_labels = np.array(total_labels)
 
-    print("="*100)
+    print("="*50)
     results_summary = compute_results_summary(
         total_probs, total_labels)
     print(results_summary)
-    print("="*100)
+    print("="*50)
 
     with open(out_dir / "results.txt", "w") as f:
         f.write(results_summary)
 
-    # plot_metrics_per_step(total_probs, total_labels, out_dir)
+    if isinstance(data, SyntheticDataset):
+
+        source_preds_results_summary = compute_source_preds_results_summary(
+            total_source_preds, total_source_labels)
+        print(source_preds_results_summary)
+        print("="*50)
+        with open(out_dir / "source_preds_results.txt", "w") as f:
+            f.write(source_preds_results_summary)
+
+    plot_metrics_per_step(total_probs, total_labels, out_dir)

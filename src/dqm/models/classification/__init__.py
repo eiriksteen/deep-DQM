@@ -1,2 +1,3 @@
 from .act import AdaptiveConvolutionalTransformer
-from .shallow_models import ChiSquareModel, CopyModel
+from .chi_square import ChiSquareModel
+from .copy import CopyModel

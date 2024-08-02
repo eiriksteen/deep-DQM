@@ -12,7 +12,7 @@ from sklearn.metrics import (
     precision_recall_curve,
     roc_curve
 )
-from dqm.models.classification.shallow_models import ChiSquareModel
+from dqm.models.classification import ChiSquareModel
 from dqm.settings import DATA_DIR
 from dqm.torch_datasets import SyntheticDataset
 from dqm.utils import compute_results_summary, plot_metrics_per_step
@@ -37,8 +37,8 @@ if __name__ == "__main__":
     parser.add_argument("--n_runs", type=int, default=1)
     parser.add_argument("--dataset", type=str, default="lhcb")
     parser.add_argument("--year", type=int, default=2018)
-    parser.add_argument("--warmup_frac", type=float, default=0.2)
-    parser.add_argument("--optimize_hyperparameters",
+    parser.add_argument("--warmup_frac", type=float, default=0.0)
+    parser.add_argument("--optimize_hyperparams",
                         action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
@@ -60,11 +60,10 @@ if __name__ == "__main__":
 
     else:
         data = SyntheticDataset(
-            size=1000,
+            size=2000,
             num_variables=100,
             num_bins=100,
-            whiten=False,
-            whiten_running=False
+            whiten=False
         )
         histograms, is_anomaly = data.data, data.labels
         histograms = histograms.reshape(len(histograms), -1)
@@ -73,9 +72,7 @@ if __name__ == "__main__":
 
         print(data)
 
-    if args.warmup_frac > 0:
-        start_idx = int(args.warmup_frac * len(histograms))
-
+    start_idx = int(args.warmup_frac * len(histograms))
     out_dir = Path(f"chi_square_results_{args.dataset}{'_'+str(
                    args.year) if args.dataset == 'lhcb' else ''}")
     out_dir.mkdir(exist_ok=True)
@@ -84,9 +81,9 @@ if __name__ == "__main__":
 
         print(f"RUN {run + 1}/{args.n_runs}")
         if args.dataset == "synthetic":
-            alpha = 0.0001143748173448866
+            alpha = 0.00011437481734488664
         elif args.year == 2018:
-            alpha = 0.715  # 0.529
+            alpha = 0.5290345799521846
         else:
             alpha = 0.02885998
 
@@ -95,7 +92,7 @@ if __name__ == "__main__":
             is_anomaly=is_anomaly,
             histo_nbins_dict=histo_nbins_dict,
             alpha=alpha,
-            optimise_hyperparameters=args.optimize_hyperparameters
+            optimise_hyperparameters=args.optimize_hyperparams
         )
 
         scores, preds, labels = model.fit()
@@ -131,8 +128,6 @@ if __name__ == "__main__":
         optimal_threshold = 0
 
         colors = ["green" if l == 0 else "red" for l in labels]
-
-        start_idx = int(args.warmup_frac * len(histograms))
 
         plt.scatter(range(len(scores)), scores, c=colors, alpha=0.6)
         tline = plt.axhline(y=optimal_threshold, color="blue", linestyle="--",
@@ -179,4 +174,4 @@ if __name__ == "__main__":
     with open(out_dir / "results.txt", "w") as f:
         f.write(results_summary)
 
-    # plot_metrics_per_step(total_scores, total_preds, total_labels, out_dir)
+    plot_metrics_per_step(total_scores, total_labels, out_dir)

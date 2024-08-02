@@ -16,13 +16,13 @@ from sklearn.metrics import (
     roc_auc_score,
     RocCurveDisplay
 )
-from dqm.models.autoencoder import AutoMLP
+from dqm.models.reconstruction import VAE
 from dqm.torch_datasets import LHCbDataset, SyntheticDataset, DataStream
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
     compute_results_summary,
-    plot_scores,
+    plot_metrics_per_step
 )
 from dqm.settings import HISTO_NBINS_DICT_2018, HISTO_NBINS_DICT_2023
 
@@ -32,8 +32,8 @@ torch.manual_seed(42)
 
 
 def warmup_synthetic(
-        autoencoder: nn.Module,
-        data: DataStream,
+        autoencoder: VAE,
+        data: LHCbDataset | SyntheticDataset,
         args: argparse.Namespace
 ):
 
@@ -90,7 +90,7 @@ def train(
             histogram = sample["histogram"].to(DEVICE)
             is_anomaly = sample["is_anomaly"].to(DEVICE)
 
-            logits = autoencoder(histogram)
+            logits, _, _ = autoencoder(histogram)
             loss = F.mse_loss(logits, histogram)
             loss_per_step.append(loss.item())
 
@@ -152,9 +152,11 @@ def train(
                 histogram_resampled, _, _ = replay_buffer(
                     histogram, is_anomaly)
 
-                logits = autoencoder(histogram_resampled)
+                logits, mu, logvar = autoencoder(histogram_resampled)
 
-                loss = F.mse_loss(logits, histogram_resampled)
+                mse_loss = ((logits - histogram_resampled)**2).sum(-1).mean()
+                kl_loss = -0.5*(1+logvar-mu**2-torch.e**logvar).sum(-1).mean()
+                loss = mse_loss + kl_loss
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -231,15 +233,15 @@ def train(
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--year", type=int, default=2023)
+    parser.add_argument("--year", type=int, default=2018)
     parser.add_argument("--steps_per_batch", type=int, default=4)
     parser.add_argument("--num_bins", type=int, default=100)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--n_runs", type=int, default=5)
-    parser.add_argument("--model", type=str, default="automlp")
+    parser.add_argument("--model", type=str, default="vae")
     parser.add_argument("--dataset", type=str, default="lhcb")
-    parser.add_argument("--warmup_frac", type=float, default=0.2)
+    parser.add_argument("--warmup_frac", type=float, default=0.1)
     parser.add_argument("--warmup_synthetic",
                         action=argparse.BooleanOptionalAction)
     # replay ratio as a fraction of the batch size
@@ -253,13 +255,13 @@ if __name__ == "__main__":
         raise ValueError(
             f"Year {args.year} not supported. Choose from {years}")
 
-    models = ["automlp"]
+    models = ["vae"]
     if args.model not in models:
         raise ValueError(
             f"Model {args.model} not supported. Choose from {models}")
 
     out_dir = Path(
-        f"./{args.model}_auto_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
+        f"./{args.model}_rec_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
     out_dir.mkdir(exist_ok=True)
 
     with open(out_dir / "config.json", "w") as f:
@@ -278,7 +280,7 @@ if __name__ == "__main__":
         )
     else:
         data = SyntheticDataset(
-            size=1000,
+            size=2000,
             num_variables=100,
             num_bins=100,
             whiten=True,
@@ -292,8 +294,8 @@ if __name__ == "__main__":
 
         print(f"RUN {run + 1}/{args.n_runs}")
 
-        if args.model == "automlp":
-            model = AutoMLP(data.num_bins, data.num_features, 32)
+        if args.model == "vae":
+            model = VAE(data.num_bins, data.num_features, 32)
         else:
             raise ValueError("Model not supported")
 
@@ -326,4 +328,4 @@ if __name__ == "__main__":
     with open(out_dir / "results.txt", "w") as f:
         f.write(results_summary)
 
-    # plot_metrics_per_step(total_probs, total_labels, out_dir)
+    plot_metrics_per_step(total_scores, total_labels, out_dir)

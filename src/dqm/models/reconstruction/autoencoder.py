@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 
-class AutoMLP(nn.Module):
+class VAE(nn.Module):
 
     def __init__(
             self,
@@ -45,4 +45,4 @@ class AutoMLP(nn.Module):
         latents = mu + torch.randn_like(mu)*torch.e**logvar
         out = self.decoder(latents)
 
-        return out
+        return out, mu, logvar

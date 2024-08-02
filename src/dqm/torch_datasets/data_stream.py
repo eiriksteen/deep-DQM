@@ -16,7 +16,7 @@ class DataStream(Dataset):
         data: np.ndarray,
         labels: np.ndarray,
         histo_nbins_dict: dict[str, int],
-        anomaly_idx: np.ndarray | None = None,
+        source_labels: np.ndarray | None = None,
         whiten: bool = True,
         to_torch: bool = True
     ):
@@ -32,7 +32,7 @@ class DataStream(Dataset):
 
         self.size, self.num_features, self.num_bins = self.data.shape
         self.num_classes = self.labels.max() + 1
-        self.anomaly_idx = anomaly_idx
+        self.source_labels = source_labels
         self.num_pos = len(self.labels[self.labels == 1])
         self.num_neg = len(self.labels[self.labels == 0])
         self.to_torch = to_torch
@@ -57,11 +57,11 @@ class DataStream(Dataset):
             "is_anomaly": is_anomaly
         }
 
-        if self.anomaly_idx is not None:
-            anomaly_idx = self.anomaly_idx[idx]
+        if self.source_labels is not None:
+            source_labels = self.source_labels[idx]
             if self.to_torch:
-                anomaly_idx = torch.tensor(anomaly_idx).float()
-            sample["anomaly_idx"] = anomaly_idx
+                source_labels = torch.tensor(source_labels).float()
+            sample["source_labels"] = source_labels
 
         return sample
 
@@ -83,6 +83,7 @@ class DataStream(Dataset):
         out = "#"*10
         out += "\nDATASET STATISTICS:"
         out += f"\nNumber of features: {self.num_features}"
+        out += f"\nNumber of bins: {self.num_bins}"
         out += f"\nNumber of classes: {self.num_classes}"
         out += f"\nNumber of samples: {self.size}"
         out += f"\nNumber of positive samples: {self.num_pos}"
@@ -191,7 +192,7 @@ class SyntheticDataset(DataStream):
             lambda x: np.abs(x)*np.log(x),
         ]
 
-        self.data, self.labels, self.anomaly_idx = self.generate_data(
+        self.data, self.labels, self.source_labels = self.generate_data(
             size, num_variables, num_bins, nominal_fraction)
 
         super().__init__(
@@ -199,7 +200,7 @@ class SyntheticDataset(DataStream):
             labels=self.labels,
             histo_nbins_dict={
                 f"var_{i}": num_bins for i in range(num_variables)},
-            anomaly_idx=self.anomaly_idx,
+            source_labels=self.source_labels,
             whiten=whiten,
             to_torch=to_torch
 
