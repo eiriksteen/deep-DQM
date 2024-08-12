@@ -6,10 +6,7 @@ from torch.utils.data import Dataset
 from ..utils import rebin
 
 
-np.random.seed(42)
-
-
-class DataStream(Dataset):
+class HistogramStream(Dataset):
 
     def __init__(
         self,
@@ -37,8 +34,8 @@ class DataStream(Dataset):
         self.num_neg = len(self.labels[self.labels == 0])
         self.to_torch = to_torch
 
-        if whiten:
-            self.whiten()
+        # if whiten:
+        #     self.whiten()
 
     def __len__(self):
         return self.size
@@ -52,8 +49,11 @@ class DataStream(Dataset):
             histogram = torch.tensor(histogram).float()
             is_anomaly = torch.tensor([is_anomaly]).float()
 
+        histogram = (histogram - histogram.mean(-1, keepdim=True)) / \
+            (histogram.std(-1, keepdim=True) + 1e-06)
+
         sample = {
-            "histogram": histogram,
+            "inp": histogram,
             "is_anomaly": is_anomaly
         }
 
@@ -80,20 +80,18 @@ class DataStream(Dataset):
 
     def __str__(self) -> str:
 
-        out = "#"*10
-        out += "\nDATASET STATISTICS:"
+        out = "\nDATASET STATISTICS:"
         out += f"\nNumber of features: {self.num_features}"
         out += f"\nNumber of bins: {self.num_bins}"
         out += f"\nNumber of classes: {self.num_classes}"
         out += f"\nNumber of samples: {self.size}"
         out += f"\nNumber of positive samples: {self.num_pos}"
         out += f"\nNumber of negative samples: {self.num_neg}"
-        out += "\n"+"#"*10
 
         return out
 
 
-class LHCbDataset(DataStream):
+class LHCbDataset(HistogramStream):
 
     def __init__(
         self,
@@ -156,7 +154,7 @@ class LHCbDataset(DataStream):
         return list(self.histo_nbins_dict.keys())
 
 
-class SyntheticDataset(DataStream):
+class SyntheticDataset(HistogramStream):
 
     def __init__(
             self,

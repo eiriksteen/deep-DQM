@@ -1,1 +1,2 @@
-from .data_stream import LHCbDataset, SyntheticDataset, DataStream
+from .histograms import LHCbDataset, SyntheticDataset, HistogramStream
+from .mvtec import MVTECDataset

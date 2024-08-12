@@ -3,6 +3,7 @@ import torch
 from pathlib import Path
 
 DATA_DIR = Path("data")
+MVTEC_DIR = DATA_DIR / "mvtec_anomaly_detection"
 
 DEVICE = (
     "mps"

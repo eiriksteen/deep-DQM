@@ -9,6 +9,7 @@ from matplotlib.lines import Line2D
 from pathlib import Path
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from pprint import pprint
 from sklearn.metrics import (
     average_precision_score,
     precision_recall_curve,
@@ -16,8 +17,8 @@ from sklearn.metrics import (
     roc_auc_score,
     RocCurveDisplay
 )
-from dqm.models.classification import ContinualShiftingTransformer, TemporalContinualTransformer
-from dqm.torch_datasets import LHCbDataset, SyntheticDataset
+from dqm.models.classification import TemporalContinualTransformer, ResNet50, ResNet, HistTran
+from dqm.torch_datasets import LHCbDataset, SyntheticDataset, MVTECDataset
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
@@ -40,7 +41,7 @@ def train(
 ):
 
     classifier = classifier.to(DEVICE)
-    replay_buffer = ReplayBuffer(data, args.k_past, classes="both")
+    replay_buffer = ReplayBuffer(data, args.k_past)
     cls_optimizer = torch.optim.Adam(classifier.parameters(), lr=args.lr)
 
     loss_fn = nn.BCEWithLogitsLoss()
@@ -56,14 +57,14 @@ def train(
 
         with torch.no_grad():
 
-            histogram = sample["inp"].to(DEVICE)
+            inp = sample["inp"].to(DEVICE)
             is_anomaly = sample["is_anomaly"].to(DEVICE)
 
             pastk = torch.stack([
                 replay_buffer.get_neg_pastk_samples(i) for i in range(batch_num, batch_num+args.batch_size)
             ]).to(DEVICE)
 
-            out = classifier(histogram, pastk[:len(histogram)])
+            out = classifier(inp, pastk[:len(inp)])
             logits = out["logits"]
 
             loss = loss_fn(logits, is_anomaly)
@@ -93,9 +94,16 @@ def train(
                 total_source_preds += source_preds[pos_idx].tolist()
                 total_source_labels += source_labels[pos_idx].tolist()
 
+            if batch_num % 50 == 0:
+                if 0 in total_labels and 1 in total_labels:
+                    print(f"auprc = {average_precision_score(
+                        total_labels, total_scores)}")
+                    print(f"roc_auc = {roc_auc_score(
+                        total_labels, total_scores)}")
+
             if args.plot:
 
-                hist_cpu = histogram.detach().cpu().numpy()
+                hist_cpu = inp.detach().cpu().numpy()
                 preds_dir = out_dir / "preds"
                 preds_dir.mkdir(exist_ok=True)
                 full_size = len(hist_cpu[0].flatten())
@@ -119,7 +127,7 @@ def train(
                     ) else None
 
                     # categories = data.get_histogram_names()
-                    plot_source_preds(histogram, anomaly_idx,
+                    plot_source_preds(inp, anomaly_idx,
                                       source_preds, source_preds_dir / f"{batch_num}.png")
 
         # Train model on current batch
@@ -128,7 +136,7 @@ def train(
 
             # Resample from replay buffer each step (simulate epochs)
             histogram_resampled, is_anomaly_resampled, pastk_resampled = replay_buffer(
-                histogram, is_anomaly, pastk)
+                inp, is_anomaly, pastk)
 
             logits = classifier(histogram_resampled,
                                 pastk_resampled)["logits"]
@@ -208,7 +216,6 @@ def train(
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="cst")
     parser.add_argument("--steps_per_batch", type=int, default=2)
     parser.add_argument("--num_bins", type=int, default=100)
     parser.add_argument("--k_past", type=int, default=5)
@@ -228,13 +235,8 @@ if __name__ == "__main__":
         raise ValueError(
             f"Year {args.year} not supported. Choose from {years}")
 
-    models = ["cst", "tct"]
-    if args.model not in models:
-        raise ValueError(
-            f"Model {args.model} not supported. Choose from {models}")
-
     out_dir = Path(
-        f"./{args.model}_inc_results_{args.year if args.dataset == "lhcb" else "synthetic"}")
+        f"./tct_inc_results_{args.dataset}{f'_{args.year}' if args.dataset == "lhcb" else ""}")
     out_dir.mkdir(exist_ok=True)
 
     with open(out_dir / "config.json", "w") as f:
@@ -251,7 +253,7 @@ if __name__ == "__main__":
             whiten=True,
             to_torch=True
         )
-    else:
+    elif args.dataset == "synthetic":
         data = SyntheticDataset(
             size=2000,
             num_variables=100,
@@ -259,6 +261,18 @@ if __name__ == "__main__":
             whiten=True
         )
 
+    elif args.dataset == "mvtec":
+        data = MVTECDataset(
+            resolution=256,
+            to_tensor=True,
+            normalize=True
+        )
+
+    print("="*50)
+    print("CONFIG:")
+    pprint(args.__dict__)
+
+    print("="*50)
     print(data)
 
     total_probs, total_labels = [], []
@@ -267,20 +281,21 @@ if __name__ == "__main__":
 
         print(f"RUN {run + 1}/{args.n_runs}")
 
-        if args.model == "cst":
-            model = ContinualShiftingTransformer(
-                data.num_bins,
-                data.num_features,
-                100,
-                k_past=args.k_past)
-        elif args.model == "tct":
-            model = TemporalContinualTransformer(
-                data.num_bins,
-                data.num_features,
-                100,
-                k_past=args.k_past)
+        if args.dataset == "mvtec":
+            backbone = ResNet50()
+            in_dim = 2048
+            # backbone = ResNet(256, 100, 3)
+            # in_dim = 100
         else:
-            raise ValueError("Model not supported")
+            backbone = HistTran(data.num_bins, 100, 10, 10)
+            in_dim = int(10**2)
+
+        model = TemporalContinualTransformer(
+            backbone,
+            in_dim,
+            100,
+            k_past=args.k_past
+        )
 
         print(f"MODEL SIZE: {sum(p.numel() for p in model.parameters())}")
 

@@ -18,7 +18,7 @@ from pathlib import Path
 sns.set_style("darkgrid")
 
 plt.rc("figure", figsize=(20, 10))
-plt.rc("font", size=13)
+plt.rc("font", size=25)
 
 warnings.filterwarnings("ignore")
 

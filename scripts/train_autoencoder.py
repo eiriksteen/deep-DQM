@@ -17,7 +17,7 @@ from sklearn.metrics import (
     RocCurveDisplay
 )
 from dqm.models.reconstruction import VAE
-from dqm.torch_datasets import LHCbDataset, SyntheticDataset, DataStream
+from dqm.torch_datasets import LHCbDataset, SyntheticDataset, HistogramStream
 from dqm.replay_buffer import ReplayBuffer
 from dqm.settings import DATA_DIR, DEVICE
 from dqm.utils import (
@@ -71,7 +71,7 @@ def warmup_synthetic(
 
 def train(
     autoencoder: nn.Module,
-    data: DataStream,
+    data: HistogramStream,
     args: argparse.Namespace
 ):
 

@@ -60,7 +60,7 @@ class MLPBlock(nn.Module):
         return self.norm(self.mlp(x) + x)
 
 
-class AdaptiveConvolutionalTransformer(nn.Module):
+class ContinualShiftingTransformer(nn.Module):
 
     def __init__(
             self,
@@ -120,6 +120,6 @@ class AdaptiveConvolutionalTransformer(nn.Module):
             source_preds = attn_weights.sum(dim=[1, 2])
             source_preds /= source_preds.max(-1, keepdim=True).values
 
-        logits = self.head(x_latents.mean(1))
+        logits = self.head(logits.mean(1))
 
         return {"logits": logits, "source_preds": source_preds}

@@ -48,7 +48,7 @@ class ReplayBuffer:
             )
 
             neg_samples = [self.dataset[i] for i in rand_idx_neg]
-            neg_hists = [s["histogram"] for s in neg_samples]
+            neg_hists = [s["inp"] for s in neg_samples]
 
             hists.append(torch.stack(neg_hists))
             labels.append(torch.stack([s["is_anomaly"] for s in neg_samples]))
@@ -71,7 +71,7 @@ class ReplayBuffer:
             )
 
             pos_samples = [self.dataset[i] for i in rand_idx_pos]
-            pos_hists = [s["histogram"] for s in pos_samples]
+            pos_hists = [s["inp"] for s in pos_samples]
 
             hists.append(torch.stack(pos_hists))
             labels.append(torch.stack([s["is_anomaly"] for s in pos_samples]))
@@ -105,7 +105,7 @@ class ReplayBuffer:
 
         neg_pastk_samples = [self.dataset[i] for i in neg_pastk_idx]
 
-        return torch.stack([s["histogram"] for s in neg_pastk_samples])
+        return torch.stack([s["inp"] for s in neg_pastk_samples])
 
     def update(self, num_steps: int):
         self.cur_idx += num_steps
