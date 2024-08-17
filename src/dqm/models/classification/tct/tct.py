@@ -9,20 +9,18 @@ class TemporalContinualTransformer(nn.Module):
     def __init__(
             self,
             backbone: nn.Module,
-            in_dim: int,
+            n_vars: int,
             hidden_dim: int,
             k_past: int
     ):
 
         super().__init__()
 
+        self.n_vars = n_vars
         self.hidden_dim = hidden_dim
         self.k_past = k_past
 
-        self.feature_extractor = nn.Sequential(
-            backbone,
-            nn.Linear(in_dim, hidden_dim)
-        )
+        self.feature_extractor = backbone
 
         self.change_detect = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
@@ -31,7 +29,7 @@ class TemporalContinualTransformer(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        self.pool = AttentionPool(hidden_dim)
+        self.pool = AttentionPool(n_vars, hidden_dim)
 
         self.head = nn.Linear(hidden_dim, 1)
 
@@ -39,14 +37,15 @@ class TemporalContinualTransformer(nn.Module):
 
         z = torch.cat([x.unsqueeze(1), past], dim=1)
         z = z.reshape(len(z) * (self.k_past+1), *z.shape[2:])
-        logits = self.feature_extractor(z).reshape(len(x), self.k_past+1, -1)
+        logits = self.feature_extractor(z).reshape(
+            len(x), self.k_past+1, self.n_vars, self.hidden_dim)
 
         x_logits = logits[:, -1]
         past_logits = logits[:, :-1]
         past_logits = self.pool(past_logits)
 
-        abs_diff = (x_logits - past_logits).abs().squeeze(1)
+        abs_diff = (x_logits - past_logits).abs()
         change = self.change_detect(abs_diff)
-        out = self.head(x_logits + change)
+        out = self.head((x_logits + change).mean(1))
 
         return {"logits": out}

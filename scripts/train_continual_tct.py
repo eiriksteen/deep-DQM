@@ -94,12 +94,12 @@ def train(
                 total_source_preds += source_preds[pos_idx].tolist()
                 total_source_labels += source_labels[pos_idx].tolist()
 
-            if batch_num % 50 == 0:
-                if 0 in total_labels and 1 in total_labels:
-                    print(f"auprc = {average_precision_score(
-                        total_labels, total_scores)}")
-                    print(f"roc_auc = {roc_auc_score(
-                        total_labels, total_scores)}")
+            # if batch_num % 50 == 0:
+            #     if 0 in total_labels and 1 in total_labels:
+            #         print(f"auprc = {average_precision_score(
+            #             total_labels, total_scores)}")
+            #         print(f"roc_auc = {roc_auc_score(
+            #             total_labels, total_scores)}")
 
             if args.plot:
 
@@ -282,17 +282,18 @@ if __name__ == "__main__":
         print(f"RUN {run + 1}/{args.n_runs}")
 
         if args.dataset == "mvtec":
-            backbone = ResNet50()
             in_dim = 2048
+            n_vars = 1
+            backbone = ResNet50()
             # backbone = ResNet(256, 100, 3)
             # in_dim = 100
         else:
-            backbone = HistTran(data.num_bins, 100, 10, 10)
-            in_dim = int(10**2)
+            n_vars = data.num_features
+            backbone = HistTran(n_vars, data.num_bins, 100)
 
         model = TemporalContinualTransformer(
             backbone,
-            in_dim,
+            n_vars,
             100,
             k_past=args.k_past
         )

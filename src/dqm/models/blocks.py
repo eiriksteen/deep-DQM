@@ -3,31 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class AttentionPool(nn.Module):
-
-    def __init__(self, d):
-        super().__init__()
-
-        self.q_embed = nn.Embedding(1, d)
-        self.norm = nn.LayerNorm(d)
-        self.attn = nn.Linear(d, 1)
-
-        self.Wq = nn.Linear(d, d)
-        self.Wkv = nn.Linear(d, 2*d)
-
-    def forward(self, x):
-
-        _, _, d = x.shape
-        q = self.Wq(self.q_embed.weight)
-        k, v = self.Wkv(x).chunk(2, dim=-1)
-
-        prod = torch.einsum("bd,bsd->bs", q, k) / d**0.5
-        attn = F.softmax(prod, dim=-1)
-        attn_logits = (attn[:, :, None] * v).sum(1)
-
-        return attn_logits
-
-
 class MultiHeadAttention(nn.Module):
 
     def __init__(
@@ -64,8 +39,7 @@ class MultiHeadAttention(nn.Module):
         out = self.proj(attn_logits.reshape(b, s, d))
         out = self.dropout(out)
 
-        # return self.norm(x + out), attn_weights
-        return self.norm(x + out)
+        return self.norm(x + out), attn_weights
 
 
 class MLP(nn.Module):
@@ -84,3 +58,30 @@ class MLP(nn.Module):
     def forward(self, x):
 
         return self.norm(self.mlp(x) + x)
+
+
+class AttentionPool(nn.Module):
+
+    def __init__(self, n_vars: int, d: int):
+        super().__init__()
+
+        self.q_embed = nn.Embedding(n_vars, d)
+        self.norm = nn.LayerNorm(d)
+        self.attn = nn.Linear(d, 1)
+
+        self.Wq = nn.Linear(d, d)
+        self.Wkv = nn.Linear(d, 2*d)
+
+    def forward(self, x):
+
+        _, _, _, d = x.shape
+        q = self.Wq(self.q_embed.weight)
+        k, v = self.Wkv(x).chunk(2, dim=-1)
+        v = x
+
+        prod = torch.einsum("nd,bsnd->bs", q, k) / d**0.5
+        attn = F.softmax(prod, dim=1)
+
+        attn_logits = (attn[:, :, None, None] * v).sum(1)
+
+        return attn_logits

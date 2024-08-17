@@ -72,30 +72,22 @@ class ResNet50(nn.Module):
 
 class HistTran(nn.Module):
 
-    def __init__(self, in_dim: int, hidden_dim: int, out_h: int, out_w: int):
+    def __init__(self, n_vars: int, in_dim: int, hidden_dim: int):
         super().__init__()
 
+        self.n_vars = n_vars
         self.in_dim = in_dim
         self.hidden_dim = hidden_dim
-        self.out_h = out_h
-        self.out_w = out_w
-        self.out_dim = out_h * out_w
 
+        self.pos_embed = nn.Embedding(n_vars, in_dim)
         self.embed = nn.Linear(in_dim, hidden_dim)
-
-        self.tran = nn.Sequential(
-            MultiHeadAttention(hidden_dim),
-            MLP(hidden_dim)
-        )
-
-        self.pool = nn.AdaptiveAvgPool2d((self.out_h, self.out_w))
+        self.mha = MultiHeadAttention(hidden_dim)
+        self.mlp = MLP(hidden_dim)
 
     def forward(self, x):
 
-        attn_logits = self.tran(self.embed(x))
+        e = self.embed(x + self.pos_embed.weight)
+        attn_logits, _ = self.mha(e)
+        logits = self.mlp(attn_logits)
 
-        attn_logits = attn_logits.to("cpu")
-        pool_logits = self.pool(attn_logits)
-        pool_logits = pool_logits.to(x.device)
-
-        return pool_logits.flatten(1)
+        return logits
